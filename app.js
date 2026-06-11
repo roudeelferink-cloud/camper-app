@@ -11,6 +11,86 @@ const CATEGORIES = [
 
 const POI_CATS = ['supermarkt', 'tankstation', 'lpg', 'camperservice', 'camperplaats', 'overig'];
 
+const INPAKLIJST_DEFAULT = [
+  ['Reisdocumenten', [
+    'Paspoort (Siem, Rob, Anouc, Elies)', 'Creditcard',
+  ]],
+  ['Siem', [
+    'Ondergoed', 'Pyjama (2x)', 'Kleren', 'Sokken', 'Jas (2x)', 'Zwembroekje (2x)',
+    'Oordopjes zwemmen', 'Leesboek', 'Chillbroek', 'Natte washandjes', 'iPad', 'Wekker',
+  ]],
+  ['Elies', [
+    'Ondergoed', 'Pyjama (1x)', 'Kleren', 'Sokken', 'Jas (2x)', 'Schoenen / laarzen',
+    'Bikini (2x)', 'Chillbroek', 'Zwembadhanddoek', 'Melatonine', 'Wekker', 'Leesboek', 'iPad',
+  ]],
+  ['Rob', [
+    'Ondergoed', 'Witte shirts', 'Zwembroek', 'Oplader', 'Telefoon', 'iPad', 'Kleding',
+    'Hoody', 'Muts', 'Sportkleding compleet (lange mouw, korte mouw, lange broek, korte broek)',
+    'Shake en beker', 'Pet',
+  ]],
+  ['Anouc', [
+    'Ondergoed & bh’s', 'Zware hempjes', 'Hardloopshirt, -broek, -sokken',
+    'Pyjamashirt (2x) en boxer', 'Kledingsetjes', 'Bikini', 'Oplader met usb', 'Telefoon',
+    'iPad', 'Leesboek', 'Tampons', 'Maandverband', 'Inlegkruisjes', 'Extra lenzen',
+    'Droogshampoo', 'Haarspray', 'Zonnebrand gezicht', 'Geurtje', 'Föhn', 'Oordopjes',
+    'Telefoontasjes', 'Rugtasje Kapten & Son', 'Tandenborstel elektrisch en lader',
+    'Shake en beker en spiraaltje',
+  ]],
+  ['Schoenen', [
+    'Hardloopschoenen Anouc en Rob', 'Slippers (ARES)', 'Makkelijke schoenen (ARES)', 'Laarzen',
+  ]],
+  ['Verzorging kids', [
+    'Luiers (maat 6) Siem', 'Shampoo', 'Tandenborstel (2x) en kindertandpasta',
+    'Borstel, elastiekjes en knipjes (Elies)', 'Haargel (Siem)', 'Knuffel (Elies en Siem)',
+    'Vitamines', 'Dopper',
+  ]],
+  ['Verzorging', [
+    'Shampoo', 'Crèmespoeling', 'Douchezeep', 'Make-upremover + watjes (Anouc)',
+    'Make-up (Anouc)', 'Lenzen en vloeistof en extra lenzen', 'Scheerapparaat', 'Handdoeken',
+    'Tepelcrème', 'Hardloopzonnebrillen',
+  ]],
+  ['Algemeen', [
+    'Zonnebrillen', 'Pantoffels (Rob sok-pantoffels)', 'Action handdoeken',
+    'Plankje Elies zwembad', 'Hoeslakens', 'Theedoeken', 'Handdoeken keuken',
+    'Schoonmaakdoekjes', 'Strandlakens', 'Handzeep', 'Joppiesaus', 'Zwembanden',
+    'Duikbrillen', 'Vw-tabletten', 'Kussens', 'Worteldoek', 'Koptelefoons kids',
+    'Bakplaatje', 'Wasmiddeldoekjes', 'Wastas', 'Walkietalkie', 'Horloges kids',
+    'Lader horloges', 'Lader Garmin', 'Contant geld', 'Stepjes',
+  ]],
+  ['Boodschappen', [
+    'Koffiecups', 'Wijn', 'Beleg', 'Afbakbroodjes', 'Kwark', 'Appels', 'Pindakaas',
+    'Crackers', 'Rijstwafels', 'Shake', 'Wc-papier', 'Pannenkoekenmix', 'Stroop', 'Zout',
+    'Peper', 'Viskruiden', 'Handzeep', 'Afwasmiddel', 'Afwasborstel', 'Honing', 'Aromat',
+    'Penne', 'Boter', 'Poedersuiker', 'Garnalen', 'Blokjes aardappelen', 'Pangafilet',
+    'Zalm', 'Kipfilet', 'Ketjap', 'Aardappelkruiden', 'Sojamelk', 'Appelsap',
+    'Proteïnereep', 'Hapjes voor plankje', 'Garlan', 'Crème de brie', 'Vla',
+    'Yoghurt', 'Cassis', 'Jippiesaus', 'Mayonaise',
+  ]],
+  ['Spelletjes', [
+    '30 Seconds', 'Hitster', 'Regenwormen', 'JBL muziek', 'Balletje balletje', 'Perudo',
+    'Zandbakspullen',
+  ]],
+  ['Slapen kids', [
+    'Zwembandjes Siem', 'Speelgoed binnen', 'Speelgoed bad voor zwemmen', 'Eastpak tas',
+    'Rugtasje Elies, Siem en Anouc',
+  ]],
+  ['Mini-apotheek', [
+    'Zetpillen', 'Kinderparacetamol', 'Vitamines', 'Pincet', 'Pleisters', 'Veiligheidsspeld',
+    'Armbandjes naam', 'Muggenprik-weg', 'Anti-mug deet', 'Vallen-en-stotencrème',
+    'Wondspray', 'Nagelknipper', 'Tekentang', 'Vaseline', 'Zakje suiker', 'Zonnebrand',
+    'Ibuprofen',
+  ]],
+  ['Let op voor overnachting', [
+    'Pantoffels in camper', 'Melk en brood voor ontbijt', 'Eten voor 1 avond',
+    'Drinkpakjes voor kids', 'Fruitzakjes',
+  ]],
+];
+
+function defaultInpaklijst() {
+  return INPAKLIJST_DEFAULT.flatMap(([group, items]) =>
+    items.map((label) => ({ id: uid(), label, done: false, group })));
+}
+
 function defaultState() {
   return {
     inventory: [],
@@ -26,6 +106,7 @@ function defaultState() {
         'Waterpas zetten', 'Stekker aansluiten', 'Gas open',
         'Koelkast op netstroom', 'Luifel uit', 'Vers water bijvullen',
       ].map((label) => ({ id: uid(), label, done: false })),
+      inpaklijst: defaultInpaklijst(),
     },
     settings: { laadvermogen: 250, mtm: 0, leeg: 0, apiKey: '', lastExport: null },
   };
@@ -49,6 +130,7 @@ function loadState() {
       checklists: {
         vertrek: Array.isArray(parsed.checklists && parsed.checklists.vertrek) ? parsed.checklists.vertrek : d.checklists.vertrek,
         aankomst: Array.isArray(parsed.checklists && parsed.checklists.aankomst) ? parsed.checklists.aankomst : d.checklists.aankomst,
+        inpaklijst: Array.isArray(parsed.checklists && parsed.checklists.inpaklijst) ? parsed.checklists.inpaklijst : d.checklists.inpaklijst,
       },
       settings: Object.assign({}, d.settings, parsed.settings || {}),
     };
@@ -665,7 +747,8 @@ function parseAdviesJSON(text) {
 
 /* ============================== lijsten ============================== */
 function renderLijsten() {
-  return renderChecklist('vertrek', 'Vertrek') + renderChecklist('aankomst', 'Aankomst');
+  return renderChecklist('vertrek', 'Vertrek') + renderChecklist('aankomst', 'Aankomst') +
+    renderChecklist('inpaklijst', 'Inpaklijst');
 }
 
 function renderChecklist(key, title) {
@@ -675,7 +758,9 @@ function renderChecklist(key, title) {
     '<span class="section-label">' + title + ' <span class="mono" style="text-transform:none;letter-spacing:0">' + done + '/' + list.length + '</span></span>' +
     '<button class="btn small secondary" data-reset="' + key + '">Reset</button></div>' +
     '<div class="card" style="padding:0">';
+  let prevGroup = null;
   html += list.map((s) =>
+    (s.group && s.group !== prevGroup ? '<div class="check-group">' + esc(prevGroup = s.group) + '</div>' : '') +
     '<div class="check-item' + (s.done ? ' done' : '') + '">' +
       '<span class="checkbox" data-toggle="' + key + ':' + s.id + '" role="checkbox" aria-checked="' + s.done + '" tabindex="0">' + CHECK_SVG + '</span>' +
       '<span class="label" data-toggle="' + key + ':' + s.id + '">' + esc(s.label) + '</span>' +
@@ -816,6 +901,7 @@ function bindInstellingen(main) {
         checklists: {
           vertrek: Array.isArray(parsed.checklists && parsed.checklists.vertrek) ? parsed.checklists.vertrek : d.checklists.vertrek,
           aankomst: Array.isArray(parsed.checklists && parsed.checklists.aankomst) ? parsed.checklists.aankomst : d.checklists.aankomst,
+          inpaklijst: Array.isArray(parsed.checklists && parsed.checklists.inpaklijst) ? parsed.checklists.inpaklijst : d.checklists.inpaklijst,
         },
         settings: Object.assign({}, d.settings, parsed.settings || {}),
       };

@@ -394,6 +394,16 @@ label.field > span {
 .list-head { display: flex; align-items: center; justify-content: space-between; margin: 18px 2px 8px; }
 .list-head .section-label { margin: 0; }
 .add-step { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); }
+.check-group {
+  font-family: var(--font-mono);
+  font-size: 0.68rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--copper);
+  padding: 12px 14px 4px;
+  border-top: 1px solid var(--line);
+}
+.check-group:first-child { border-top: none; }
+.check-group + .check-item { border-top: none; }
 
 /* ---------- bottom sheet ---------- */
 .sheet-backdrop {
