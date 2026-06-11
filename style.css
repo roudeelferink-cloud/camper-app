@@ -200,7 +200,6 @@ label.field > span {
   transition: width 0.4s ease;
 }
 .weightbar .ok { background: var(--green); }
-.weightbar .warn { background: var(--warn); }
 .weightbar .over { background: var(--red); }
 .weight-over { color: var(--red); font-weight: 700; }
 

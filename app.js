@@ -27,7 +27,7 @@ function defaultState() {
         'Koelkast op netstroom', 'Luifel uit', 'Vers water bijvullen',
       ].map((label) => ({ id: uid(), label, done: false })),
     },
-    settings: { laadvermogen: 600, mtm: 0, leeg: 0, apiKey: '', lastExport: null },
+    settings: { laadvermogen: 250, mtm: 0, leeg: 0, apiKey: '', lastExport: null },
   };
 }
 
@@ -180,9 +180,7 @@ function renderWeightBar() {
   const total = invTotalWeight();
   const max = Number(state.settings.laadvermogen) || 0;
   const pct = max > 0 ? (total / max) * 100 : 0;
-  let cls = 'ok';
-  if (pct >= 100) cls = 'over';
-  else if (pct >= 80) cls = 'warn';
+  const cls = total > max ? 'over' : 'ok';
   const over = total - max;
   return (
     '<div class="weightbar-wrap">' +
