@@ -1,6 +1,18 @@
 /* Camper Compagnon — alle logica, geen frameworks, data in localStorage. */
 'use strict';
 
+/* ============================== config ============================== */
+// Geoapify (locatie & omgeving) — key is bedoeld voor client-side gebruik;
+// beperk hem in het Geoapify-dashboard tot het Pages-domein.
+const GEOAPIFY_KEY = 'e74e117b64814add803ad6c80d5557db';
+const GEOAPIFY_RADIUS_M = 10000; // zoekstraal rond de camping, in meters
+const OMGEVING_GROEPEN = [
+  { titel: 'Eten & drinken', categories: 'catering.restaurant,catering.cafe' },
+  { titel: 'Strand & natuur', categories: 'beach,natural' },
+  { titel: 'Boodschappen', categories: 'commercial.supermarket' },
+  { titel: 'Bezienswaardigheden', categories: 'tourism.sights,tourism.attraction' },
+];
+
 /* ============================== opslag ============================== */
 const STORAGE_KEY = 'camper:v1';
 
@@ -208,6 +220,8 @@ const ui = {
   poiFilter: 'alle',
   adviesBusy: false,
   adviesError: null,
+  omgevingBusy: false,
+  omgevingError: null,
 };
 
 /* ============================== bottom sheet ============================== */
@@ -499,6 +513,7 @@ function bindReizen(main) {
       ui.tripView = { id: card.dataset.trip, subtab: 'paklijst' };
       ui.poiFilter = 'alle';
       ui.adviesError = null;
+      ui.omgevingError = null;
       render();
     });
   });
@@ -508,12 +523,13 @@ function bindReizen(main) {
 
 function openTripSheet(id) {
   const t = id ? state.trips.find((x) => x.id === id) : null;
-  const v = t || { place: '', country: '', startDate: '', endDate: '', notes: '' };
+  const v = t || { place: '', country: '', startDate: '', endDate: '', notes: '', camping: '' };
   openSheet(
     '<h2>' + (t ? 'Reis bewerken' : 'Reis toevoegen') + '</h2>' +
     '<form id="trip-form">' +
       '<label class="field"><span>Plaats</span><input name="place" required value="' + esc(v.place) + '" autocomplete="off"></label>' +
       '<label class="field"><span>Land</span><input name="country" required value="' + esc(v.country) + '" autocomplete="off"></label>' +
+      '<label class="field"><span>Camping (optioneel)</span><input name="camping" value="' + esc(v.camping || '') + '" autocomplete="off" placeholder="bv. Yelloh Village, Saint Pabu Plage"></label>' +
       '<div class="field-row">' +
         '<label class="field"><span>Van</span><input name="startDate" type="date" required value="' + esc(v.startDate) + '"></label>' +
         '<label class="field"><span>Tot</span><input name="endDate" type="date" required value="' + esc(v.endDate) + '"></label>' +
@@ -541,13 +557,19 @@ function openTripSheet(id) {
     const data = {
       place: String(f.get('place') || '').trim(),
       country: String(f.get('country') || '').trim(),
+      camping: String(f.get('camping') || '').trim(),
       startDate: String(f.get('startDate') || ''),
       endDate: String(f.get('endDate') || ''),
       notes: String(f.get('notes') || '').trim(),
     };
     if (!data.place) return;
-    if (t) Object.assign(t, data);
-    else state.trips.push(Object.assign({ id: uid(), packed: {}, advies: null, poi: null, adviesDate: null }, data));
+    if (t) {
+      // andere camping → oude omgevingscache klopt niet meer
+      if (t.camping !== data.camping && t.omgeving) t.omgeving = null;
+      Object.assign(t, data);
+    } else {
+      state.trips.push(Object.assign({ id: uid(), packed: {}, advies: null, poi: null, adviesDate: null, omgeving: null }, data));
+    }
     save(); closeSheet(); render();
   });
 }
@@ -565,9 +587,10 @@ function renderTripDetail() {
     '</div>' +
     '<div class="subtabs">' +
       '<button data-sub="paklijst" class="' + (sub === 'paklijst' ? 'active' : '') + '">Paklijst</button>' +
+      '<button data-sub="omgeving" class="' + (sub === 'omgeving' ? 'active' : '') + '">Omgeving</button>' +
       '<button data-sub="advies" class="' + (sub === 'advies' ? 'active' : '') + '">Advies &amp; POI</button>' +
     '</div>';
-  html += sub === 'paklijst' ? renderPaklijst(t) : renderAdvies(t);
+  html += sub === 'paklijst' ? renderPaklijst(t) : (sub === 'omgeving' ? renderOmgeving(t) : renderAdvies(t));
   return html;
 }
 
@@ -647,6 +670,98 @@ function renderAdvies(t) {
   return html;
 }
 
+/* ---------- omgeving (Geoapify) ---------- */
+function fmtAfstand(m) {
+  if (m < 1000) return m + ' m';
+  return (m / 1000).toFixed(1).replace('.', ',') + ' km';
+}
+
+function zoekTekst(t) {
+  return [t.camping, t.place, t.country].filter(Boolean).join(', ');
+}
+
+function renderOmgeving(t) {
+  let html = '';
+  if (ui.omgevingError) {
+    html += '<div class="alert danger"><h3>Zoeken mislukt</h3><p>' + esc(ui.omgevingError) + '</p></div>';
+  }
+  if (ui.omgevingBusy) {
+    html += '<button class="btn block" disabled><span class="spinner"></span>Bezig met zoeken…</button>';
+  } else {
+    html += '<button class="btn block" id="zoek-omgeving">' +
+      (t.omgeving ? 'Opnieuw zoeken' : 'Zoek locatie &amp; omgeving') + '</button>' +
+      '<p class="muted mono" style="margin:8px 2px 0">Zoekt op: ' + esc(zoekTekst(t)) + '</p>';
+  }
+  const o = t.omgeving;
+  if (o) {
+    html += '<div class="card" style="margin-top:12px"><strong>📍 ' + esc(o.adres) + '</strong>' +
+      '<p class="muted mono" style="margin:6px 0 0">Opgehaald op ' + fmtDate(o.datum) +
+      ' · straal ' + (GEOAPIFY_RADIUS_M / 1000) + ' km · ' +
+      '<a href="https://www.google.com/maps?q=' + o.lat + ',' + o.lon + '" target="_blank" rel="noopener">open in kaart</a></p></div>';
+    for (const g of o.groepen) {
+      html += '<div class="section-label">' + esc(g.titel) + '</div><div class="card" style="padding:0">';
+      if (!g.items.length) {
+        html += '<div class="poi-item muted">Niets gevonden binnen ' + (GEOAPIFY_RADIUS_M / 1000) + ' km.</div>';
+      } else {
+        html += g.items.map((p) =>
+          '<div class="poi-item" style="display:flex;align-items:center;gap:10px">' +
+            '<div style="flex:1;min-width:0"><div class="name">' + esc(p.naam) + '</div>' +
+            '<div class="detail mono">' + fmtAfstand(p.afstandM) + '</div></div>' +
+            '<a class="btn small secondary" href="https://www.google.com/maps?q=' + p.lat + ',' + p.lon +
+            '" target="_blank" rel="noopener" style="text-decoration:none">kaart</a>' +
+          '</div>'
+        ).join('');
+      }
+      html += '</div>';
+    }
+  }
+  return html;
+}
+
+async function zoekOmgeving(t) {
+  ui.omgevingBusy = true;
+  ui.omgevingError = null;
+  render();
+  try {
+    const tekst = zoekTekst(t);
+    const geoRes = await fetch('https://api.geoapify.com/v1/geocode/search?text=' +
+      encodeURIComponent(tekst) + '&limit=1&lang=nl&apiKey=' + GEOAPIFY_KEY);
+    if (!geoRes.ok) throw new Error('Locatie zoeken mislukt (HTTP ' + geoRes.status + ') — probeer het later opnieuw.');
+    const geo = await geoRes.json();
+    const feat = geo.features && geo.features[0];
+    if (!feat || feat.properties.lat == null) {
+      throw new Error('Niets gevonden voor “' + tekst + '”. Pas de campingnaam aan via ✎ en zoek opnieuw.');
+    }
+    const lat = feat.properties.lat;
+    const lon = feat.properties.lon;
+    const groepen = await Promise.all(OMGEVING_GROEPEN.map(async (g) => {
+      const res = await fetch('https://api.geoapify.com/v2/places?categories=' + g.categories +
+        '&filter=circle:' + lon + ',' + lat + ',' + GEOAPIFY_RADIUS_M +
+        '&bias=proximity:' + lon + ',' + lat + '&limit=20&lang=nl&apiKey=' + GEOAPIFY_KEY);
+      if (!res.ok) throw new Error('Omgeving ophalen mislukt (HTTP ' + res.status + ') — probeer het later opnieuw.');
+      const data = await res.json();
+      return {
+        titel: g.titel,
+        items: (data.features || [])
+          .filter((f) => f.properties && f.properties.name)
+          .map((f) => ({
+            naam: f.properties.name,
+            afstandM: Math.round(f.properties.distance || 0),
+            lat: f.properties.lat,
+            lon: f.properties.lon,
+          })),
+      };
+    }));
+    t.omgeving = { lat, lon, adres: feat.properties.formatted || tekst, datum: todayISO(), groepen };
+    save();
+  } catch (e) {
+    ui.omgevingError = (e && e.message) ? e.message : 'Onbekende fout. Controleer je internetverbinding.';
+  } finally {
+    ui.omgevingBusy = false;
+    render();
+  }
+}
+
 function bindTripDetail(main) {
   const t = state.trips.find((x) => x.id === ui.tripView.id);
   main.querySelector('#trip-back').addEventListener('click', () => { ui.tripView = null; render(); });
@@ -667,6 +782,8 @@ function bindTripDetail(main) {
   });
   const fetchBtn = main.querySelector('#fetch-advies');
   if (fetchBtn) fetchBtn.addEventListener('click', () => fetchAdvies(t));
+  const omgevingBtn = main.querySelector('#zoek-omgeving');
+  if (omgevingBtn) omgevingBtn.addEventListener('click', () => zoekOmgeving(t));
 }
 
 /* ---------- Anthropic API ---------- */
