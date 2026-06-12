@@ -445,6 +445,40 @@ const ui = {
   omgevingOpen: new Set(), // groepstitels waarvan alle POI's uitgeklapt zijn
 };
 
+/* ---------- in-/uitklapstand van secties ----------
+   Weergavevoorkeur per toestel: alleen in localStorage, bewust NIET in
+   Firestore. Key per sectie-ID; geen entry = de zinnige default geldt. */
+const COLLAPSE_KEY = 'camper:collapsed:v1';
+
+const collapsedMap = (() => {
+  try { return JSON.parse(localStorage.getItem(COLLAPSE_KEY)) || {}; } catch (e) { return {}; }
+})();
+
+function saveCollapsed() {
+  try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsedMap)); } catch (e) { /* oké */ }
+}
+
+// def = default-ingeklapt (true) als de gebruiker nog nooit getikt heeft
+function isCollapsed(id, def) {
+  return Object.prototype.hasOwnProperty.call(collapsedMap, id) ? !!collapsedMap[id] : !!def;
+}
+
+function toggleCollapsed(id, def) {
+  collapsedMap[id] = !isCollapsed(id, def);
+  saveCollapsed();
+  render();
+}
+
+// Tapbare sectie-kop met chevron; actionsHtml (bv. Reset/✕) blijft ernaast staan.
+function secHead(id, def, labelHtml, actionsHtml) {
+  const open = !isCollapsed(id, def);
+  return '<div class="list-head">' +
+    '<button class="sec-toggle' + (open ? ' open' : '') + '" data-sec="' + esc(id) + '" data-secdef="' + (def ? 1 : 0) + '" ' +
+      'aria-expanded="' + open + '">' + CHEV_SVG +
+      '<span class="section-label">' + labelHtml + '</span></button>' +
+    (actionsHtml || '') + '</div>';
+}
+
 /* ============================== bottom sheet ============================== */
 const sheetEl = document.getElementById('sheet');
 const backdropEl = document.getElementById('sheet-backdrop');
@@ -965,10 +999,13 @@ function renderOnderweg(t) {
     const info = LAND_INFO[l.naam];
     const relevant = l.items.filter((it) => it.status !== 'nvt');
     const klaar = l.items.filter((it) => it.status === 'gedaan').length;
-    html += '<div class="list-head"><span class="section-label">' + esc(l.naam) +
-      ' <span class="mono" style="text-transform:none;letter-spacing:0">' + klaar + ' van ' + relevant.length + ' geregeld</span></span>' +
-      '<button class="icon-btn" data-ow-delland="' + li + '" aria-label="Land verwijderen">✕</button></div>' +
-      '<div class="card" style="padding:0">';
+    const secId = 'ow:' + t.id + ':' + l.naam;
+    const secDef = l.items.length > 0 && klaar === relevant.length; // alles geregeld → dicht
+    html += secHead(secId, secDef,
+      esc(l.naam) + ' <span class="mono" style="text-transform:none;letter-spacing:0">' + klaar + ' van ' + relevant.length + ' geregeld</span>',
+      '<button class="icon-btn" data-ow-delland="' + li + '" aria-label="Land verwijderen">✕</button>');
+    if (isCollapsed(secId, secDef)) continue;
+    html += '<div class="card" style="padding:0">';
     html += '<div class="ow-vignet mono">' +
       esc(info ? info.vignet : 'Geen vaste items voor dit land — vul hieronder zelf aan.') + '</div>';
     html += l.items.map((it) => {
@@ -1127,7 +1164,20 @@ function renderEten(t) {
   }
   for (const dag of dagen) {
     const dm = t.meals[dag] || {};
-    html += '<div class="section-label">' + esc(fmtDag(dag)) + '</div><div class="card" style="padding:0">';
+    const secId = 'eten:' + t.id + ':' + dag;
+    // verleden of volledig gepland diner → dicht; nog te plannen → open
+    const secDef = dag < todayISO() || !!dm.diner;
+    const samenvatting = MAALTIJD_SLOTS.map(([slot]) => {
+      const m = dm[slot];
+      if (!m) return '—';
+      return m.type === 'koken' ? (m.gerecht || 'koken') : (m.plek || 'uit eten');
+    }).join(' / ');
+    html += secHead(secId, secDef,
+      esc(fmtDag(dag)) +
+      (isCollapsed(secId, secDef) ? ' <span class="sec-sum mono">' + esc(samenvatting) + '</span>' : ''),
+      '');
+    if (isCollapsed(secId, secDef)) continue;
+    html += '<div class="card" style="padding:0">';
     for (const [slot, label] of MAALTIJD_SLOTS) {
       const m = dm[slot];
       let inhoud = '';
@@ -1570,12 +1620,14 @@ function renderShoplist(l) {
         : '') +
       '<button class="icon-btn" data-shop-rm="' + l.id + ':' + it.id + '" aria-label="Verwijderen">✕</button>' +
     '</div>';
-  let html = '<div class="list-head">' +
-    '<span class="section-label">' + esc(l.name) +
-      ' <span class="mono" style="text-transform:none;letter-spacing:0">' + af.length + ' van ' + items.length +
-      (kg > 0 ? ' · ~' + fmtKg(kg) + ' kg' : '') + '</span></span>' +
-    '<button class="icon-btn" data-shop-dellist="' + l.id + '" aria-label="Lijst verwijderen">✕</button></div>' +
-    '<div class="card" style="padding:0">';
+  const secId = 'shop:' + l.id;
+  const secDef = items.length > 0 && af.length === items.length; // alles afgevinkt → dicht
+  let html = secHead(secId, secDef,
+    esc(l.name) + ' <span class="mono" style="text-transform:none;letter-spacing:0">' + af.length + ' van ' + items.length +
+      (kg > 0 ? ' · ~' + fmtKg(kg) + ' kg' : '') + '</span>',
+    '<button class="icon-btn" data-shop-dellist="' + l.id + '" aria-label="Lijst verwijderen">✕</button>');
+  if (isCollapsed(secId, secDef)) return html;
+  html += '<div class="card" style="padding:0">';
   if (!items.length) {
     html += '<div class="poi-item muted">Nog leeg — voeg hieronder iets toe.</div>';
   }
@@ -1699,19 +1751,43 @@ function bindBoodschappen(main) {
 }
 
 /* ============================== lijsten ============================== */
+function lijstenSecties() {
+  const secs = state.shoplists.map((l) => ({
+    id: 'shop:' + l.id,
+    def: (l.items || []).length > 0 && l.items.every((it) => it.done),
+  }));
+  for (const key of ['vertrek', 'aankomst', 'inpaklijst']) {
+    const s = checklistSec(key);
+    secs.push({ id: s.id, def: s.def });
+  }
+  return secs;
+}
+
 function renderLijsten() {
-  return renderBoodschappen() +
+  const secs = lijstenSecties();
+  const anyOpen = secs.some((s) => !isCollapsed(s.id, s.def));
+  return '<div class="collapse-all-row"><button class="btn small secondary" id="collapse-all">' +
+      (anyOpen ? 'Alles inklappen' : 'Alles uitklappen') + '</button></div>' +
+    renderBoodschappen() +
     renderChecklist('vertrek', 'Vertrek') + renderChecklist('aankomst', 'Aankomst') +
     renderChecklist('inpaklijst', 'Inpaklijst');
 }
 
-function renderChecklist(key, title) {
+function checklistSec(key) {
   const list = state.checklists[key];
   const done = list.filter((s) => s.done).length;
-  let html = '<div class="list-head">' +
-    '<span class="section-label">' + title + ' <span class="mono" style="text-transform:none;letter-spacing:0">' + done + '/' + list.length + '</span></span>' +
-    '<button class="btn small secondary" data-reset="' + key + '">Reset</button></div>' +
-    '<div class="card" style="padding:0">';
+  // afgeronde lijsten starten ingeklapt, onafgemaakte open
+  return { id: 'chk:' + key, def: list.length > 0 && done === list.length, done, total: list.length };
+}
+
+function renderChecklist(key, title) {
+  const list = state.checklists[key];
+  const sec = checklistSec(key);
+  let html = secHead(sec.id, sec.def,
+    esc(title) + ' <span class="mono" style="text-transform:none;letter-spacing:0">' + sec.done + '/' + sec.total + '</span>',
+    '<button class="btn small secondary" data-reset="' + key + '">Reset</button>');
+  if (isCollapsed(sec.id, sec.def)) return html;
+  html += '<div class="card" style="padding:0">';
   let prevGroup = null;
   html += list.map((s) =>
     (s.group && s.group !== prevGroup ? '<div class="check-group">' + esc(prevGroup = s.group) + '</div>' : '') +
@@ -1729,6 +1805,16 @@ function renderChecklist(key, title) {
 
 function bindLijsten(main) {
   bindBoodschappen(main);
+  const allBtn = main.querySelector('#collapse-all');
+  if (allBtn) {
+    allBtn.addEventListener('click', () => {
+      const secs = lijstenSecties();
+      const anyOpen = secs.some((s) => !isCollapsed(s.id, s.def));
+      for (const s of secs) collapsedMap[s.id] = anyOpen;
+      saveCollapsed();
+      render();
+    });
+  }
   main.querySelectorAll('[data-toggle]').forEach((el) => {
     el.addEventListener('click', () => {
       const [key, id] = el.dataset.toggle.split(':');
@@ -1931,6 +2017,11 @@ function render() {
     case 'instellingen': bindInstellingen(main); break;
   }
 
+  // inklapbare sectie-koppen (Lijsten, Eten, Onderweg)
+  main.querySelectorAll('.sec-toggle').forEach((btn) => {
+    btn.addEventListener('click', () => toggleCollapsed(btn.dataset.sec, btn.dataset.secdef === '1'));
+  });
+
   // tabbar
   document.querySelectorAll('.tabbar .tab').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.tab === ui.tab);
@@ -1958,9 +2049,42 @@ if (corruptNotice) {
   toast('Opgeslagen data was beschadigd. Er is een reservekopie bewaard en de app is opnieuw gestart.', 6000);
 }
 
+/* ---------- service worker + update-melding ---------- */
+// Geen automatische harde reload (je kunt midden in het invullen zitten):
+// zodra een nieuwe SW actief is, verschijnt een tapbare melding.
+let updateBannerShown = false;
+
+function showUpdateBanner() {
+  if (updateBannerShown) return;
+  updateBannerShown = true;
+  const el = document.createElement('button');
+  el.id = 'update-banner';
+  el.className = 'update-banner';
+  el.textContent = 'Nieuwe versie beschikbaar — tik om te vernieuwen';
+  el.addEventListener('click', () => window.location.reload());
+  document.body.appendChild(el);
+  // geen requestAnimationFrame: die staat stil zolang de pagina niet zichtbaar is
+  setTimeout(() => el.classList.add('show'), 30);
+}
+
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => { /* offline blijft werken zonder */ });
+  window.addEventListener('load', async () => {
+    try {
+      const reg = await navigator.serviceWorker.register('./sw.js');
+      // Melding pas als de nieuwe SW de pagina écht overgenomen heeft
+      // (controllerchange = geactiveerd ÉN geclaimd) — eerder herladen zou de
+      // oude cache nog een keer serveren. De allereerste claim (verse
+      // installatie) telt niet; elke wissel daarna is een echte update.
+      let wasControlled = !!navigator.serviceWorker.controller;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (wasControlled) showUpdateBanner();
+        wasControlled = true;
+      });
+      // check op updates wanneer de app weer naar voren komt
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) reg.update().catch(() => { /* offline */ });
+      });
+    } catch (e) { /* offline blijft werken zonder */ }
   });
 }
 
