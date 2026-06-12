@@ -2,6 +2,8 @@
    Data: localStorage als lokale cache + Firestore-sync per huishouden. */
 'use strict';
 
+import { schatGewicht } from './weights.js';
+
 /* ============================== config ============================== */
 // Firebase (sync tussen de toestellen van één huishouden)
 const firebaseConfig = {
@@ -319,6 +321,58 @@ function koppelHousehold(code) {
   subscribeHousehold(code);
 }
 
+/* ============================== gewichtsschatting (AI-haak, optioneel) ============================== */
+// De Anthropic-key blijft puur lokaal: niet in state, dus nooit in Firestore,
+// export-JSON of git.
+const ANTHROPIC_KEY_STORAGE = 'camper:anthropicKey';
+
+function getAnthropicKey() {
+  try { return localStorage.getItem(ANTHROPIC_KEY_STORAGE) || ''; } catch (e) { return ''; }
+}
+
+function setAnthropicKey(key) {
+  try {
+    if (key) localStorage.setItem(ANTHROPIC_KEY_STORAGE, key);
+    else localStorage.removeItem(ANTHROPIC_KEY_STORAGE);
+  } catch (e) { /* oké */ }
+}
+
+// Vraagt Claude (haiku) om een gewicht in gram voor een onbekend item.
+// Geen key of geen bereik → null, de app werkt gewoon door op de tabel.
+async function aiSchatGewicht(naam) {
+  const key = getAnthropicKey();
+  if (!key || !navigator.onLine) return null;
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5',
+        max_tokens: 16,
+        messages: [{
+          role: 'user',
+          content: 'Typisch gewicht in gram van één stuk van dit camper/boodschappen-item: "' +
+            naam + '". Antwoord met uitsluitend één geheel getal (gram), niets anders.',
+        }],
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text = (data.content && data.content[0] && data.content[0].text) || '';
+    const m = text.match(/\d+/);
+    if (!m) return null;
+    const g = parseInt(m[0], 10);
+    return (g > 0 && g <= 100000) ? g : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 /* ============================== helpers ============================== */
 function uid() {
   if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
@@ -496,11 +550,16 @@ function renderInvItem(it) {
       '<button data-status="op" class="' + (it.status === 'op' ? 'sel-op' : '') + '">Op</button>' +
     '</div>';
   }
+  const w = Number(it.weight) || 0;
+  const q = Number(it.qty) || 0;
+  const est = !!it.weightEstimated;
+  const gewichtHtml = est
+    ? '<span class="w-est">~' + fmtKg(w) + ' kg = ~' + fmtKg(w * q) + ' kg</span>'
+    : fmtKg(w) + ' kg = ' + fmtKg(w * q) + ' kg';
   return '<div class="inv-item">' +
     '<div class="inv-main" data-edit="' + it.id + '">' +
       '<div class="inv-name">' + esc(it.name) + '</div>' +
-      '<div class="inv-sub">' + (Number(it.qty) || 0) + ' × ' + fmtKg(Number(it.weight) || 0) + ' kg = ' +
-        fmtKg((Number(it.weight) || 0) * (Number(it.qty) || 0)) + ' kg' + expHtml + '</div>' +
+      '<div class="inv-sub">' + q + ' × ' + gewichtHtml + expHtml + '</div>' +
     '</div>' + statusHtml +
   '</div>';
 }
@@ -540,7 +599,9 @@ function openItemSheet(id) {
       '</select></label>' +
       '<div class="field-row">' +
         '<label class="field"><span>Aantal</span><input name="qty" type="number" min="0" step="1" inputmode="numeric" value="' + esc(v.qty) + '"></label>' +
-        '<label class="field"><span>Gewicht/stuk (kg)</span><input name="weight" type="number" min="0" step="0.01" inputmode="decimal" value="' + esc(v.weight) + '"></label>' +
+        '<label class="field"><span>Gewicht/stuk (kg) <em id="weight-est-flag" class="est-flag"' +
+          (v.weightEstimated ? '' : ' hidden') + '>~ geschat</em></span>' +
+          '<input name="weight" type="number" min="0" step="0.01" inputmode="decimal" value="' + esc(v.weight) + '"></label>' +
       '</div>' +
       '<label class="field"><span>Soort</span><select name="type">' +
         '<option value="uitrusting"' + (v.type === 'uitrusting' ? ' selected' : '') + '>Uitrusting</option>' +
@@ -555,6 +616,67 @@ function openItemSheet(id) {
     '</form>'
   );
   document.getElementById('item-cancel').addEventListener('click', closeSheet);
+
+  /* --- automatische gewichtsschatting --- */
+  const itemForm = document.getElementById('item-form');
+  const nameInput = itemForm.elements.name;
+  const weightInput = itemForm.elements.weight;
+  const estFlagEl = document.getElementById('weight-est-flag');
+  let estFlag = it ? !!it.weightEstimated : false;
+  let estTimer = null;
+  let aiToken = 0;
+
+  function showEstFlag() { estFlagEl.hidden = !estFlag; }
+
+  // Alleen invullen als het veld leeg/0 is of de huidige waarde zelf een schatting is —
+  // een handmatig ("hard") gewicht wordt nooit overschreven.
+  function magInvullen() {
+    return estFlag || !(parseFloat(weightInput.value) > 0);
+  }
+
+  function applyEstimate(viaAi) {
+    if (!magInvullen()) return;
+    const grams = schatGewicht(nameInput.value);
+    if (grams != null) {
+      weightInput.value = String(grams / 1000);
+      estFlag = true;
+      showEstFlag();
+      return;
+    }
+    // Geen match: bestaand geschat gewicht hoort niet meer bij deze naam → leegmaken.
+    if (estFlag) {
+      weightInput.value = '';
+      estFlag = false;
+      showEstFlag();
+    }
+    if (!viaAi) return;
+    // Optionele AI-haak: alleen met key én internet, anders stil overslaan.
+    const naam = nameInput.value.trim();
+    if (!naam) return;
+    const token = ++aiToken;
+    aiSchatGewicht(naam).then((g) => {
+      if (g == null || token !== aiToken) return;
+      if (nameInput.value.trim() !== naam || !magInvullen()) return;
+      weightInput.value = String(g / 1000);
+      estFlag = true;
+      showEstFlag();
+    });
+  }
+
+  nameInput.addEventListener('input', () => {
+    clearTimeout(estTimer);
+    estTimer = setTimeout(() => applyEstimate(false), 350);
+  });
+  nameInput.addEventListener('change', () => {
+    clearTimeout(estTimer);
+    applyEstimate(true);
+  });
+  weightInput.addEventListener('input', () => {
+    // Handmatige aanpassing = hard gewicht: tilde weg.
+    estFlag = false;
+    showEstFlag();
+  });
+
   if (it) {
     document.getElementById('item-delete').addEventListener('click', () => {
       state.inventory = state.inventory.filter((x) => x.id !== it.id);
@@ -568,11 +690,13 @@ function openItemSheet(id) {
     const f = new FormData(e.target);
     const name = String(f.get('name') || '').trim();
     if (!name) return;
+    const weight = Math.max(0, parseFloat(f.get('weight')) || 0);
     const data = {
       name,
       category: String(f.get('category')),
       qty: Math.max(0, parseInt(f.get('qty'), 10) || 0),
-      weight: Math.max(0, parseFloat(f.get('weight')) || 0),
+      weight,
+      weightEstimated: estFlag && weight > 0,
       type: String(f.get('type')) === 'verbruik' ? 'verbruik' : 'uitrusting',
       expiry: String(f.get('expiry') || '') || null,
     };
@@ -1007,6 +1131,13 @@ function renderInstellingen() {
       '<p class="muted mono" style="margin-bottom:0">Sync: ' + esc(syncInfo.status) +
         (syncInfo.detail ? ' — ' + esc(syncInfo.detail) : '') + '</p>' +
     '</div>' +
+    '<div class="section-label">Gewichtsschatting (optioneel, AI)</div>' +
+    '<div class="card">' +
+      '<p class="muted" style="margin-top:0">Onbekende items (geen match in de gewichtstabel) mogen via Claude geschat worden. ' +
+        'Zonder key of internet wordt dit stil overgeslagen. De key blijft alleen op dit toestel — nooit gesynct of geëxporteerd.</p>' +
+      '<label class="field"><span>Anthropic API-key</span>' +
+        '<input id="set-anthropic" type="password" placeholder="sk-ant-…" autocomplete="off" value="' + esc(getAnthropicKey()) + '"></label>' +
+    '</div>' +
     '<div class="section-label">Back-up</div>' +
     '<div class="card">' +
       '<p class="muted" style="margin-top:0">Laatste export: <span class="mono">' +
@@ -1033,6 +1164,10 @@ function bindInstellingen(main) {
     state.settings.laadvermogen = diff;
     save(); render();
     toast('Laadvermogen gezet op ' + fmtKg(diff) + ' kg');
+  });
+  main.querySelector('#set-anthropic').addEventListener('change', (e) => {
+    setAnthropicKey(e.target.value.trim());
+    toast(e.target.value.trim() ? 'API-key lokaal opgeslagen' : 'API-key verwijderd');
   });
   main.querySelector('#btn-copy-code').addEventListener('click', async () => {
     const code = householdCode();

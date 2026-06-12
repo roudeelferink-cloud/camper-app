@@ -243,6 +243,14 @@ label.field > span {
 .inv-main { flex: 1; min-width: 0; cursor: pointer; }
 .inv-name { font-weight: 600; font-size: 0.93rem; }
 .inv-sub { font-family: var(--font-mono); font-size: 0.7rem; color: var(--ink-soft); margin-top: 1px; }
+.inv-sub .w-est { color: #b3aea2; }
+.est-flag {
+  font-style: normal;
+  text-transform: none;
+  letter-spacing: 0;
+  color: #b3aea2;
+  margin-left: 6px;
+}
 .inv-sub .exp-warn { color: var(--warn); font-weight: 600; }
 .inv-sub .exp-over { color: var(--red); font-weight: 600; }
 
