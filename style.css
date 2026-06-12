@@ -167,6 +167,11 @@ label.field > span {
 .field-row { display: flex; gap: 10px; }
 .field-row > label.field { flex: 1; }
 
+/* ---------- koppeling ---------- */
+.code-row { display: flex; gap: 8px; align-items: stretch; }
+.code-row input { flex: 1; min-width: 0; font-size: 0.88rem; }
+.code-row .btn { flex-shrink: 0; }
+
 /* ---------- waarschuwingsblok ---------- */
 .alert {
   border-radius: var(--radius);

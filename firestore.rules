@@ -1,0 +1,16 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Eén document per huishouden; doc-ID = niet-te-raden 16-teken hex-code.
+    // Lezen/schrijven vereist een (anoniem) auth-token. De code zelf is het
+    // gedeelde geheim tussen de gekoppelde toestellen.
+    match /households/{code} {
+      allow read, write: if request.auth != null;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

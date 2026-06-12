@@ -1,7 +1,19 @@
-/* Camper Compagnon — alle logica, geen frameworks, data in localStorage. */
+/* Camper Compagnon — alle logica, geen frameworks.
+   Data: localStorage als lokale cache + Firestore-sync per huishouden. */
 'use strict';
 
 /* ============================== config ============================== */
+// Firebase (sync tussen de toestellen van één huishouden)
+const firebaseConfig = {
+  apiKey: 'AIzaSyBfIRQVYADLitxVUXHaENwRjEsMOfXQvto',
+  authDomain: 'notin-app.firebaseapp.com',
+  projectId: 'notin-app',
+  storageBucket: 'notin-app.firebasestorage.app',
+  messagingSenderId: '368094874150',
+  appId: '1:368094874150:web:a8b70cc36c458c565934e7',
+};
+const FIREBASE_SDK = 'https://www.gstatic.com/firebasejs/10.12.2/';
+
 // Geoapify (locatie & omgeving) — key is bedoeld voor client-side gebruik;
 // beperk hem in het Geoapify-dashboard tot het Pages-domein.
 const GEOAPIFY_KEY = 'e74e117b64814add803ad6c80d5557db';
@@ -153,12 +165,158 @@ function loadState() {
   }
 }
 
-function save() {
+function persistLocal() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (e) {
     toast('Opslaan mislukt — opslag vol of geblokkeerd.');
   }
+}
+
+function save() {
+  persistLocal();
+  scheduleSync();
+}
+
+/* ============================== sync (Firestore) ============================== */
+const HOUSEHOLD_KEY = 'camper:household';
+const SYNC_DEBOUNCE_MS = 500;
+
+let fb = null;            // { db, doc, setDoc, onSnapshot } zodra de SDK geladen is
+let fbUnsubscribe = null; // actieve onSnapshot-listener
+let syncTimer = null;
+let syncDirty = false;    // mutatie gedaan vóórdat Firebase klaar was
+const syncInfo = { status: 'starten', detail: '' };
+
+function setSyncInfo(status, detail) {
+  syncInfo.status = status;
+  syncInfo.detail = detail || '';
+  if (ui.tab === 'instellingen') render();
+}
+
+function randomHex16() {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function householdCode() {
+  let code = null;
+  try { code = localStorage.getItem(HOUSEHOLD_KEY); } catch (e) { /* private mode */ }
+  if (!code || !/^[0-9a-f]{16}$/.test(code)) {
+    code = randomHex16();
+    try { localStorage.setItem(HOUSEHOLD_KEY, code); } catch (e) { /* oké */ }
+  }
+  return code;
+}
+
+// state → Firestore-document (NL-veldnamen, JSON-rondje strips undefined)
+function stateToDoc() {
+  return JSON.parse(JSON.stringify({
+    voorraad: state.inventory,
+    wensen: state.wishlist,
+    reizen: state.trips,
+    lijsten: state.checklists,
+    instellingen: state.settings,
+    bijgewerkt: new Date().toISOString(),
+  }));
+}
+
+function docToState(data) {
+  const d = defaultState();
+  state = {
+    inventory: Array.isArray(data.voorraad) ? data.voorraad : d.inventory,
+    wishlist: Array.isArray(data.wensen) ? data.wensen : d.wishlist,
+    trips: Array.isArray(data.reizen) ? data.reizen : d.trips,
+    checklists: {
+      vertrek: Array.isArray(data.lijsten && data.lijsten.vertrek) ? data.lijsten.vertrek : d.checklists.vertrek,
+      aankomst: Array.isArray(data.lijsten && data.lijsten.aankomst) ? data.lijsten.aankomst : d.checklists.aankomst,
+      inpaklijst: Array.isArray(data.lijsten && data.lijsten.inpaklijst) ? data.lijsten.inpaklijst : d.checklists.inpaklijst,
+    },
+    settings: Object.assign({}, d.settings, data.instellingen || {}),
+  };
+}
+
+function scheduleSync() {
+  if (!fb) { syncDirty = true; return; }
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(pushState, SYNC_DEBOUNCE_MS);
+}
+
+function pushState() {
+  if (!fb) { syncDirty = true; return; }
+  syncDirty = false;
+  const ref = fb.doc(fb.db, 'households', householdCode());
+  fb.setDoc(ref, stateToDoc(), { merge: true }).catch(() => {
+    // offline: Firestore's eigen IndexedDB-cache bewaart de write en synct later
+  });
+}
+
+function subscribeHousehold(code) {
+  if (!fb) return;
+  if (fbUnsubscribe) { fbUnsubscribe(); fbUnsubscribe = null; }
+  const ref = fb.doc(fb.db, 'households', code);
+  let first = true;
+  fbUnsubscribe = fb.onSnapshot(ref, (snap) => {
+    setSyncInfo('verbonden', '');
+    if (first) {
+      first = false;
+      // Eenmalige migratie: bestaat het huishoud-document nog niet,
+      // push dan de lokale data als startpunt.
+      if (!snap.exists()) { pushState(); return; }
+    }
+    if (snap.metadata.hasPendingWrites) return; // eigen (lokale) schrijfactie
+    if (!snap.exists()) return;
+    docToState(snap.data());
+    persistLocal();
+    render();
+  }, (err) => {
+    setSyncInfo('fout', (err && err.code === 'permission-denied')
+      ? 'Geen toegang — zijn de Firestore-rules gepubliceerd en is anonieme login aan?'
+      : (err && err.message) || 'Onbekende fout');
+  });
+}
+
+async function initSync() {
+  let appMod, fsMod, authMod;
+  try {
+    [appMod, fsMod, authMod] = await Promise.all([
+      import(FIREBASE_SDK + 'firebase-app.js'),
+      import(FIREBASE_SDK + 'firebase-firestore.js'),
+      import(FIREBASE_SDK + 'firebase-auth.js'),
+    ]);
+  } catch (e) {
+    // SDK niet bereikbaar (eerste start offline) — app draait volledig op localStorage
+    setSyncInfo('offline', 'Geen verbinding — wijzigingen blijven lokaal tot er internet is.');
+    return;
+  }
+  try {
+    const app = appMod.initializeApp(firebaseConfig);
+    let db;
+    try {
+      // Offline persistence: Firestore cachet zelf in IndexedDB en synct bij herverbinding.
+      db = fsMod.initializeFirestore(app, {
+        localCache: fsMod.persistentLocalCache({ tabManager: fsMod.persistentMultipleTabManager() }),
+      });
+    } catch (e2) {
+      db = fsMod.getFirestore(app);
+    }
+    fb = { db, doc: fsMod.doc, setDoc: fsMod.setDoc, onSnapshot: fsMod.onSnapshot };
+    try {
+      await authMod.signInAnonymously(authMod.getAuth(app));
+    } catch (e3) {
+      setSyncInfo('fout', 'Anoniem inloggen mislukt — zet "Anonymous" aan onder Authentication in de Firebase-console.');
+    }
+    subscribeHousehold(householdCode());
+    if (syncDirty) scheduleSync();
+  } catch (e) {
+    setSyncInfo('fout', (e && e.message) || 'Firebase initialiseren mislukt.');
+  }
+}
+
+function koppelHousehold(code) {
+  try { localStorage.setItem(HOUSEHOLD_KEY, code); } catch (e) { /* oké */ }
+  subscribeHousehold(code);
 }
 
 /* ============================== helpers ============================== */
@@ -837,6 +995,18 @@ function renderInstellingen() {
       '</div>' +
       '<button class="btn small secondary" id="set-diff">Verschil overnemen als laadvermogen</button>' +
     '</div>' +
+    '<div class="section-label">Koppeling</div>' +
+    '<div class="card">' +
+      '<p class="muted" style="margin-top:0">Beide telefoons met dezelfde huishoud-code zien en bewerken dezelfde data.</p>' +
+      '<label class="field"><span>Code van dit toestel</span>' +
+        '<div class="code-row"><input id="own-code" class="mono" readonly value="' + esc(householdCode()) + '">' +
+        '<button class="btn small secondary" id="btn-copy-code">Kopieer code</button></div></label>' +
+      '<label class="field"><span>Plak code van het andere toestel</span>' +
+        '<div class="code-row"><input id="join-code" class="mono" placeholder="bv. 3fa9c1d27e80b465" autocomplete="off" autocapitalize="off" spellcheck="false">' +
+        '<button class="btn small" id="btn-join">Koppel</button></div></label>' +
+      '<p class="muted mono" style="margin-bottom:0">Sync: ' + esc(syncInfo.status) +
+        (syncInfo.detail ? ' — ' + esc(syncInfo.detail) : '') + '</p>' +
+    '</div>' +
     '<div class="section-label">Back-up</div>' +
     '<div class="card">' +
       '<p class="muted" style="margin-top:0">Laatste export: <span class="mono">' +
@@ -846,7 +1016,7 @@ function renderInstellingen() {
         '<textarea id="import-area" rows="3" placeholder="{ … }"></textarea></label>' +
       '<button class="btn block secondary" id="btn-import">Importeer</button>' +
     '</div>' +
-    '<p class="muted" style="text-align:center">Camper Compagnon · data blijft op dit toestel</p>';
+    '<p class="muted" style="text-align:center">Camper Compagnon · gedeeld via huishoud-code, offline blijft alles werken</p>';
 }
 
 function bindInstellingen(main) {
@@ -863,6 +1033,28 @@ function bindInstellingen(main) {
     state.settings.laadvermogen = diff;
     save(); render();
     toast('Laadvermogen gezet op ' + fmtKg(diff) + ' kg');
+  });
+  main.querySelector('#btn-copy-code').addEventListener('click', async () => {
+    const code = householdCode();
+    try {
+      await navigator.clipboard.writeText(code);
+      toast('Code gekopieerd — plak hem op het andere toestel');
+    } catch (e) {
+      const input = main.querySelector('#own-code');
+      input.select();
+      try { document.execCommand('copy'); toast('Code gekopieerd'); } catch (e2) { toast('Kopiëren mislukt — selecteer de code handmatig.'); }
+    }
+  });
+  main.querySelector('#btn-join').addEventListener('click', () => {
+    const raw = main.querySelector('#join-code').value.trim().toLowerCase();
+    if (!/^[0-9a-f]{16}$/.test(raw)) {
+      toast('Dat lijkt geen geldige code — verwacht 16 tekens (0-9, a-f).');
+      return;
+    }
+    if (raw === householdCode()) { toast('Dit toestel gebruikt deze code al.'); return; }
+    koppelHousehold(raw);
+    render();
+    toast('Gekoppeld! Data wordt nu gedeeld via dit huishouden.');
   });
   main.querySelector('#btn-export').addEventListener('click', () => {
     state.settings.lastExport = new Date().toISOString();
@@ -966,3 +1158,5 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js').catch(() => { /* offline blijft werken zonder */ });
   });
 }
+
+initSync();
