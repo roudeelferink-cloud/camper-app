@@ -386,6 +386,30 @@ label.field > span {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ---------- maaltijdplanner ---------- */
+.meal-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 14px;
+  border-top: 1px solid var(--line);
+  cursor: pointer;
+}
+.meal-row:first-child { border-top: none; }
+.meal-label {
+  font-size: 0.64rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--ink-soft);
+  width: 60px; flex-shrink: 0;
+}
+.meal-inhoud { flex: 1; min-width: 0; font-size: 0.9rem; font-weight: 600; }
+.meal-empty .meal-inhoud { color: var(--ink-soft); font-weight: 400; }
+.meal-missing .meal-inhoud { color: var(--warn); }
+.meal-go { color: var(--ink-soft); font-size: 1.1rem; }
+.ing-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+.ing-row .ing-naam { flex: 1.4; min-width: 0; }
+.ing-row .ing-hoev { flex: 1; min-width: 0; }
+.check-inline { display: flex; align-items: center; gap: 8px; font-size: 0.88rem; margin: 12px 0 4px; }
+.check-inline input { width: auto; }
+
 /* ---------- boodschappenlijsten ---------- */
 .shop-item {
   display: flex; align-items: center; gap: 12px;

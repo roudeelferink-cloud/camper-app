@@ -878,9 +878,10 @@ function renderTripDetail() {
     '</div>' +
     '<div class="subtabs">' +
       '<button data-sub="paklijst" class="' + (sub === 'paklijst' ? 'active' : '') + '">Paklijst</button>' +
+      '<button data-sub="eten" class="' + (sub === 'eten' ? 'active' : '') + '">Eten</button>' +
       '<button data-sub="omgeving" class="' + (sub === 'omgeving' ? 'active' : '') + '">Omgeving</button>' +
     '</div>';
-  html += sub === 'omgeving' ? renderOmgeving(t) : renderPaklijst(t);
+  html += sub === 'omgeving' ? renderOmgeving(t) : (sub === 'eten' ? renderEten(t) : renderPaklijst(t));
   return html;
 }
 
@@ -914,6 +915,320 @@ function renderPaklijst(t) {
       }).join('') + '</div>';
   }
   return html;
+}
+
+/* ---------- maaltijdplanner (subtab Eten) ---------- */
+const MAALTIJD_SLOTS = [['ontbijt', 'Ontbijt'], ['lunch', 'Lunch'], ['diner', 'Diner']];
+
+function tripDays(t) {
+  const days = [];
+  if (!t.startDate) return days;
+  const start = new Date(t.startDate + 'T12:00:00');
+  const end = t.endDate ? new Date(t.endDate + 'T12:00:00') : start;
+  if (isNaN(start) || isNaN(end)) return days;
+  for (let d = new Date(start), i = 0; d <= end && i < 60; d.setDate(d.getDate() + 1), i++) {
+    days.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'));
+  }
+  return days;
+}
+
+function fmtDag(iso) {
+  const d = new Date(iso + 'T12:00:00');
+  if (isNaN(d)) return iso;
+  return d.toLocaleDateString('nl-NL', { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
+// alle "zelf koken"-maaltijden van een reis: [{ dag, slot, meal }]
+function kookEntries(t) {
+  const out = [];
+  const meals = t.meals || {};
+  for (const dag of Object.keys(meals)) {
+    for (const [slot] of MAALTIJD_SLOTS) {
+      const m = meals[dag] && meals[dag][slot];
+      if (m && m.type === 'koken' && Array.isArray(m.ingredienten) && m.ingredienten.length) {
+        out.push({ dag, slot, meal: m });
+      }
+    }
+  }
+  return out;
+}
+
+function renderEten(t) {
+  if (!t.meals) t.meals = {};
+  const dagen = tripDays(t);
+  const nieuw = kookEntries(t).filter((e) => !e.meal.doorgerold).length;
+  let html = '<button class="btn block" id="rol-alles">Alle kook-maaltijden → boodschappenlijst' +
+    (nieuw ? ' (' + nieuw + ' nieuw)' : '') + '</button>';
+  if (!dagen.length) {
+    html += '<div class="empty">Geen reisdagen — zet eerst de reisdata via ✎.</div>';
+    return html;
+  }
+  for (const dag of dagen) {
+    const dm = t.meals[dag] || {};
+    html += '<div class="section-label">' + esc(fmtDag(dag)) + '</div><div class="card" style="padding:0">';
+    for (const [slot, label] of MAALTIJD_SLOTS) {
+      const m = dm[slot];
+      let inhoud = '';
+      let cls = '';
+      if (!m) {
+        // diner is verplicht: leeg diner-slot valt op, ontbijt/lunch zijn optioneel
+        if (slot === 'diner') { inhoud = 'nog plannen'; cls = ' meal-missing'; }
+        else { inhoud = '—'; cls = ' meal-empty'; }
+      } else if (m.type === 'koken') {
+        inhoud = '🍳 ' + esc(m.gerecht || 'zelf koken') +
+          ' <span class="muted mono">' + (m.ingredienten || []).length + ' ingr.' +
+          (m.doorgerold ? ' · ✓' : '') + '</span>';
+      } else {
+        inhoud = '🍽️ ' + esc(m.plek || 'uit eten') +
+          (m.budget ? ' <span class="muted mono">' + esc(m.budget) + '</span>' : '');
+      }
+      html += '<div class="meal-row' + cls + '" data-meal-dag="' + dag + '" data-meal-slot="' + slot + '">' +
+        '<span class="meal-label mono">' + label + '</span>' +
+        '<span class="meal-inhoud">' + inhoud + '</span>' +
+        '<span class="meal-go">›</span></div>';
+    }
+    html += '</div>';
+  }
+  return html;
+}
+
+// hoeveelheden samenvoegen: zelfde eenheid -> optellen, anders beide tonen
+function mergeHoeveelheid(a, b) {
+  a = String(a || '').trim(); b = String(b || '').trim();
+  if (!a) return b;
+  if (!b) return a;
+  const re = /^(\d+(?:[.,]\d+)?)\s*(.*)$/;
+  const ma = a.match(re);
+  const mb = b.match(re);
+  if (ma && mb && ma[2].trim().toLowerCase() === mb[2].trim().toLowerCase()) {
+    const sum = parseFloat(ma[1].replace(',', '.')) + parseFloat(mb[1].replace(',', '.'));
+    const num = (Math.round(sum * 100) / 100).toString().replace('.', ',');
+    return ma[2].trim() ? num + ' ' + ma[2].trim() : num;
+  }
+  return a + ' + ' + b;
+}
+
+function kiesShoplistSheet(trip, cb) {
+  const nieuwNaam = 'Boodschappen ' + (trip.place || 'reis');
+  openSheet(
+    '<h2>Naar welke boodschappenlijst?</h2>' +
+    '<form id="kies-lijst-form">' +
+      '<label class="field"><span>Lijst</span><select name="lijst">' +
+        state.shoplists.map((l) => '<option value="' + l.id + '">' + esc(l.name) + '</option>').join('') +
+        '<option value="__nieuw">+ Nieuwe lijst “' + esc(nieuwNaam) + '”</option>' +
+      '</select></label>' +
+      '<div class="sheet-actions">' +
+        '<button type="button" class="btn secondary" id="kies-lijst-cancel">Annuleren</button>' +
+        '<button type="submit" class="btn">Toevoegen</button>' +
+      '</div>' +
+    '</form>'
+  );
+  document.getElementById('kies-lijst-cancel').addEventListener('click', closeSheet);
+  document.getElementById('kies-lijst-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const keuze = String(new FormData(e.target).get('lijst'));
+    let lijst = state.shoplists.find((l) => l.id === keuze);
+    if (!lijst) {
+      lijst = { id: uid(), name: nieuwNaam, items: [], standard: [] };
+      state.shoplists.push(lijst);
+    }
+    cb(lijst);
+  });
+}
+
+// Rolt kook-maaltijden door naar een boodschappenlijst. Idempotent: alleen
+// maaltijden zonder doorgerold-vlag gaan mee; dedupe op ingrediëntnaam.
+function rolMaaltijden(trip, entries) {
+  const teDoen = entries.filter((e) => !e.meal.doorgerold);
+  if (!teDoen.length) {
+    toast('Niets nieuws door te rollen — alles staat al op een lijst.');
+    return;
+  }
+  kiesShoplistSheet(trip, (lijst) => {
+    if (!Array.isArray(lijst.items)) lijst.items = [];
+    let toegevoegd = 0;
+    let samengevoegd = 0;
+    for (const e of teDoen) {
+      for (const ing of e.meal.ingredienten) {
+        const naam = String(ing.naam || '').trim();
+        if (!naam) continue;
+        const hoev = String(ing.hoeveelheid || '').trim();
+        const bestaand = lijst.items.find((it) => String(it.naam).trim().toLowerCase() === naam.toLowerCase());
+        if (bestaand) {
+          bestaand.hoeveelheid = mergeHoeveelheid(bestaand.hoeveelheid, hoev);
+          samengevoegd++;
+        } else {
+          lijst.items.push(nieuwShopItem(naam, hoev)); // incl. ~geschat gewicht via weights.js
+          toegevoegd++;
+        }
+      }
+      e.meal.doorgerold = true;
+    }
+    save(); closeSheet(); render();
+    toast(toegevoegd + ' ingrediënt' + (toegevoegd === 1 ? '' : 'en') + ' toegevoegd aan “' + lijst.name + '”' +
+      (samengevoegd ? ' (' + samengevoegd + ' samengevoegd)' : ''));
+  });
+}
+
+function openMealSheet(t, dag, slot) {
+  const slotLabel = (MAALTIJD_SLOTS.find(([s]) => s === slot) || [])[1] || slot;
+  if (!t.meals) t.meals = {};
+  const huidig = (t.meals[dag] && t.meals[dag][slot]) || null;
+  const type = huidig ? huidig.type : 'leeg';
+  openSheet(
+    '<h2>' + esc(slotLabel) + ' · ' + esc(fmtDag(dag)) + '</h2>' +
+    '<form id="meal-form">' +
+      '<label class="field"><span>Type</span><select name="type">' +
+        '<option value="leeg"' + (type === 'leeg' ? ' selected' : '') + '>Leeg / overslaan</option>' +
+        '<option value="koken"' + (type === 'koken' ? ' selected' : '') + '>Zelf koken</option>' +
+        '<option value="restaurant"' + (type === 'restaurant' ? ' selected' : '') + '>Restaurant / uit eten</option>' +
+      '</select></label>' +
+      '<div id="meal-koken" hidden>' +
+        (state.recipes.length
+          ? '<label class="field"><span>Uit gerechten-archief</span><div class="code-row">' +
+              '<select id="meal-archief"><option value="">— kies een gerecht —</option>' +
+              state.recipes.map((r) => '<option value="' + r.id + '">' + esc(r.naam) + '</option>').join('') +
+              '</select>' +
+              '<button type="button" class="btn small secondary" id="archief-del" hidden>Wis</button>' +
+            '</div></label>'
+          : '') +
+        '<label class="field"><span>Gerecht</span><input name="gerecht" autocomplete="off" placeholder="bv. pasta pesto"></label>' +
+        '<div class="section-label" style="margin-top:4px">Ingrediënten</div>' +
+        '<div id="ing-rows"></div>' +
+        '<button type="button" class="btn small secondary" id="ing-add">+ ingrediënt</button>' +
+        '<label class="check-inline"><input type="checkbox" name="bewaar"> Bewaar gerecht in archief</label>' +
+      '</div>' +
+      '<div id="meal-restaurant" hidden>' +
+        '<label class="field"><span>Naam / plek (optioneel)</span><input name="plek" autocomplete="off"></label>' +
+        '<label class="field"><span>Budget-notitie (optioneel)</span><input name="budget" autocomplete="off" placeholder="bv. max €60"></label>' +
+      '</div>' +
+      (huidig && huidig.type === 'koken' && (huidig.ingredienten || []).length
+        ? '<button type="button" class="btn small secondary block" id="meal-rol" style="margin-top:10px">' +
+            (huidig.doorgerold ? '✓ Al doorgerold — nogmaals naar boodschappenlijst' : 'Deze maaltijd → boodschappenlijst') +
+          '</button>'
+        : '') +
+      '<div class="sheet-actions">' +
+        '<button type="button" class="btn secondary" id="meal-cancel">Annuleren</button>' +
+        '<button type="submit" class="btn">Opslaan</button>' +
+      '</div>' +
+    '</form>'
+  );
+
+  const form = document.getElementById('meal-form');
+  const kokenDiv = document.getElementById('meal-koken');
+  const restoDiv = document.getElementById('meal-restaurant');
+  const ingRows = document.getElementById('ing-rows');
+
+  function ingRow(naam, hoeveelheid) {
+    const div = document.createElement('div');
+    div.className = 'ing-row';
+    div.innerHTML = '<input class="ing-naam" placeholder="ingrediënt" autocomplete="off" value="' + esc(naam || '') + '">' +
+      '<input class="ing-hoev" placeholder="hoeveelheid" autocomplete="off" value="' + esc(hoeveelheid || '') + '">' +
+      '<button type="button" class="icon-btn ing-del" aria-label="Verwijderen">✕</button>';
+    div.querySelector('.ing-del').addEventListener('click', () => div.remove());
+    return div;
+  }
+
+  function vulKoken(gerecht, ingredienten) {
+    form.elements.gerecht.value = gerecht || '';
+    ingRows.innerHTML = '';
+    (ingredienten && ingredienten.length ? ingredienten : [{}]).forEach((i) => ingRows.appendChild(ingRow(i.naam, i.hoeveelheid)));
+  }
+
+  function leesIngredienten() {
+    return Array.from(ingRows.querySelectorAll('.ing-row')).map((row) => ({
+      naam: row.querySelector('.ing-naam').value.trim(),
+      hoeveelheid: row.querySelector('.ing-hoev').value.trim(),
+    })).filter((i) => i.naam);
+  }
+
+  function toonType() {
+    const v = form.elements.type.value;
+    kokenDiv.hidden = v !== 'koken';
+    restoDiv.hidden = v !== 'restaurant';
+  }
+
+  // init
+  if (huidig && huidig.type === 'koken') vulKoken(huidig.gerecht, huidig.ingredienten);
+  else vulKoken('', []);
+  if (huidig && huidig.type === 'restaurant') {
+    form.elements.plek.value = huidig.plek || '';
+    form.elements.budget.value = huidig.budget || '';
+  }
+  toonType();
+
+  form.elements.type.addEventListener('change', toonType);
+  document.getElementById('ing-add').addEventListener('click', () => {
+    const row = ingRow('', '');
+    ingRows.appendChild(row);
+    row.querySelector('.ing-naam').focus();
+  });
+  document.getElementById('meal-cancel').addEventListener('click', closeSheet);
+
+  const archiefSel = document.getElementById('meal-archief');
+  const archiefDel = document.getElementById('archief-del');
+  if (archiefSel) {
+    archiefSel.addEventListener('change', () => {
+      const r = state.recipes.find((x) => x.id === archiefSel.value);
+      if (archiefDel) archiefDel.hidden = !r;
+      if (r) vulKoken(r.naam, r.ingredienten);
+    });
+  }
+  if (archiefDel) {
+    archiefDel.addEventListener('click', () => {
+      const r = state.recipes.find((x) => x.id === archiefSel.value);
+      if (!r) return;
+      state.recipes = state.recipes.filter((x) => x.id !== r.id);
+      save();
+      archiefSel.querySelector('option[value="' + r.id + '"]').remove();
+      archiefSel.value = '';
+      archiefDel.hidden = true;
+      toast('“' + r.naam + '” uit archief verwijderd');
+    });
+  }
+
+  const rolBtn = document.getElementById('meal-rol');
+  if (rolBtn) {
+    rolBtn.addEventListener('click', () => {
+      // bewust óók nogmaals mogelijk: vlag tijdelijk negeren als hij al doorgerold is
+      const entry = { dag, slot, meal: huidig };
+      if (huidig.doorgerold) huidig.doorgerold = false;
+      rolMaaltijden(t, [entry]);
+    });
+  }
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const v = form.elements.type.value;
+    if (!t.meals[dag]) t.meals[dag] = {};
+    if (v === 'leeg') {
+      delete t.meals[dag][slot];
+      if (!Object.keys(t.meals[dag]).length) delete t.meals[dag];
+    } else if (v === 'koken') {
+      const gerecht = form.elements.gerecht.value.trim();
+      const ingredienten = leesIngredienten();
+      // ongewijzigde maaltijd houdt zijn doorgerold-vlag (idempotent doorrollen)
+      const zelfde = huidig && huidig.type === 'koken' && huidig.gerecht === gerecht &&
+        JSON.stringify(huidig.ingredienten || []) === JSON.stringify(ingredienten);
+      t.meals[dag][slot] = {
+        type: 'koken', gerecht, ingredienten,
+        doorgerold: zelfde ? !!huidig.doorgerold : false,
+      };
+      if (form.elements.bewaar.checked && gerecht) {
+        const bestaand = state.recipes.find((r) => r.naam.trim().toLowerCase() === gerecht.toLowerCase());
+        if (bestaand) bestaand.ingredienten = ingredienten;
+        else state.recipes.push({ id: uid(), naam: gerecht, ingredienten });
+        toast('“' + gerecht + '” bewaard in gerechten-archief');
+      }
+    } else {
+      t.meals[dag][slot] = {
+        type: 'restaurant',
+        plek: form.elements.plek.value.trim(),
+        budget: form.elements.budget.value.trim(),
+      };
+    }
+    save(); closeSheet(); render();
+  });
 }
 
 /* ---------- omgeving (Geoapify) ---------- */
@@ -1042,6 +1357,11 @@ function bindTripDetail(main) {
   });
   const omgevingBtn = main.querySelector('#zoek-omgeving');
   if (omgevingBtn) omgevingBtn.addEventListener('click', () => zoekOmgeving(t));
+  main.querySelectorAll('[data-meal-dag]').forEach((el) => {
+    el.addEventListener('click', () => openMealSheet(t, el.dataset.mealDag, el.dataset.mealSlot));
+  });
+  const rolAlles = main.querySelector('#rol-alles');
+  if (rolAlles) rolAlles.addEventListener('click', () => rolMaaltijden(t, kookEntries(t)));
 }
 
 /* ============================== boodschappenlijsten ============================== */
