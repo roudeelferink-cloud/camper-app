@@ -1,11 +1,12 @@
 // Camper Compagnon — service worker, cache-first, volledig offline.
-const VERSION = 'v1.0.4';
+const VERSION = 'v1.1.0';
 const CACHE_NAME = 'camper-compagnon-' + VERSION;
 
 const APP_SHELL = [
   './',
   './index.html',
   './app.js',
+  './weights.js',
   './style.css',
   './manifest.json',
   './icon-192.png',
@@ -40,7 +41,10 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   const isOwn = url.origin === self.location.origin;
   const isFont = url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com';
-  if (!isOwn && !isFont) return; // API-calls e.d. nooit cachen
+  // Firebase SDK-modules van gstatic cachen, zodat de app offline blijft
+  // opstarten (de Firestore-data zelf zit in IndexedDB, niet in deze cache).
+  const isFirebaseSdk = url.hostname === 'www.gstatic.com' && url.pathname.indexOf('/firebasejs/') === 0;
+  if (!isOwn && !isFont && !isFirebaseSdk) return; // API-calls e.d. nooit cachen
 
   // Cache-first: eigen bestanden en fonts.
   event.respondWith(
