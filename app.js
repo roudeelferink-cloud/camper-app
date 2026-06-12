@@ -134,6 +134,10 @@ function defaultState() {
       ].map((label) => ({ id: uid(), label, done: false })),
       inpaklijst: defaultInpaklijst(),
     },
+    // boodschappenlijsten: [{ id, name, items: [{id, naam, hoeveelheid, gewichtG, geschat, done}], standard: [...] }]
+    shoplists: [],
+    // gerechten-archief: [{ id, naam, ingredienten: [{naam, hoeveelheid}] }]
+    recipes: [],
     settings: { laadvermogen: 250, mtm: 0, leeg: 0, lastExport: null },
   };
 }
@@ -158,6 +162,8 @@ function loadState() {
         aankomst: Array.isArray(parsed.checklists && parsed.checklists.aankomst) ? parsed.checklists.aankomst : d.checklists.aankomst,
         inpaklijst: Array.isArray(parsed.checklists && parsed.checklists.inpaklijst) ? parsed.checklists.inpaklijst : d.checklists.inpaklijst,
       },
+      shoplists: Array.isArray(parsed.shoplists) ? parsed.shoplists : d.shoplists,
+      recipes: Array.isArray(parsed.recipes) ? parsed.recipes : d.recipes,
       settings: Object.assign({}, d.settings, parsed.settings || {}),
     };
   } catch (e) {
@@ -219,6 +225,8 @@ function stateToDoc() {
     wensen: state.wishlist,
     reizen: state.trips,
     lijsten: state.checklists,
+    boodschappen: state.shoplists,
+    gerechten: state.recipes,
     instellingen: state.settings,
     bijgewerkt: new Date().toISOString(),
   }));
@@ -235,6 +243,8 @@ function docToState(data) {
       aankomst: Array.isArray(data.lijsten && data.lijsten.aankomst) ? data.lijsten.aankomst : d.checklists.aankomst,
       inpaklijst: Array.isArray(data.lijsten && data.lijsten.inpaklijst) ? data.lijsten.inpaklijst : d.checklists.inpaklijst,
     },
+    shoplists: Array.isArray(data.boodschappen) ? data.boodschappen : d.shoplists,
+    recipes: Array.isArray(data.gerechten) ? data.gerechten : d.recipes,
     settings: Object.assign({}, d.settings, data.instellingen || {}),
   };
 }
@@ -483,7 +493,8 @@ function expiringItems() {
 }
 
 function renderWeightBar() {
-  const total = invTotalWeight();
+  const shopKg = shoplistsTotalKg();
+  const total = invTotalWeight() + shopKg; // geplande boodschappen tellen mee
   const max = Number(state.settings.laadvermogen) || 0;
   const pct = max > 0 ? (total / max) * 100 : 0;
   const cls = total > max ? 'over' : 'ok';
@@ -495,6 +506,7 @@ function renderWeightBar() {
         (cls === 'over' ? ' <span class="weight-over">+' + fmtKg(over) + ' kg te veel</span>' : '') +
       '</span></div>' +
       '<div class="weightbar"><div class="' + cls + '" style="width:' + Math.min(100, pct).toFixed(1) + '%"></div></div>' +
+      (shopKg > 0 ? '<div class="weightbar-note mono">waarvan ~' + fmtKg(shopKg) + ' kg geplande boodschappen</div>' : '') +
     '</div>'
   );
 }
@@ -1032,9 +1044,181 @@ function bindTripDetail(main) {
   if (omgevingBtn) omgevingBtn.addEventListener('click', () => zoekOmgeving(t));
 }
 
+/* ============================== boodschappenlijsten ============================== */
+function shopItemKg(it) {
+  // hoeveelheid die een kaal aantal is ("2") telt als multiplier; "500 g" e.d. niet
+  const m = String(it.hoeveelheid || '').trim().match(/^(\d{1,3})$/);
+  const mult = m ? parseInt(m[1], 10) : 1;
+  return ((Number(it.gewichtG) || 0) / 1000) * mult;
+}
+
+function shoplistKg(l) {
+  return (l.items || []).reduce((s, it) => s + shopItemKg(it), 0);
+}
+
+function shoplistsTotalKg() {
+  return (state.shoplists || []).reduce((s, l) => s + shoplistKg(l), 0);
+}
+
+function nieuwShopItem(naam, hoeveelheid) {
+  const grams = schatGewicht(naam);
+  return {
+    id: uid(),
+    naam,
+    hoeveelheid: hoeveelheid || '',
+    gewichtG: grams != null ? grams : 0,
+    geschat: grams != null,
+    done: false,
+  };
+}
+
+function renderShoplist(l) {
+  const items = l.items || [];
+  const af = items.filter((it) => it.done);
+  const openItems = items.filter((it) => !it.done);
+  const kg = shoplistKg(l);
+  const row = (it) =>
+    '<div class="shop-item' + (it.done ? ' done' : '') + '">' +
+      '<span class="checkbox" data-shop-toggle="' + l.id + ':' + it.id + '">' + CHECK_SVG + '</span>' +
+      '<span class="label" data-shop-toggle="' + l.id + ':' + it.id + '">' + esc(it.naam) +
+        (it.hoeveelheid ? ' <span class="muted mono">' + esc(it.hoeveelheid) + '</span>' : '') + '</span>' +
+      ((Number(it.gewichtG) || 0) > 0
+        ? '<span class="mono shop-kg' + (it.geschat ? ' w-est' : '') + '">' + (it.geschat ? '~' : '') + fmtKg(it.gewichtG / 1000) + ' kg</span>'
+        : '') +
+      '<button class="icon-btn" data-shop-rm="' + l.id + ':' + it.id + '" aria-label="Verwijderen">✕</button>' +
+    '</div>';
+  let html = '<div class="list-head">' +
+    '<span class="section-label">' + esc(l.name) +
+      ' <span class="mono" style="text-transform:none;letter-spacing:0">' + af.length + ' van ' + items.length +
+      (kg > 0 ? ' · ~' + fmtKg(kg) + ' kg' : '') + '</span></span>' +
+    '<button class="icon-btn" data-shop-dellist="' + l.id + '" aria-label="Lijst verwijderen">✕</button></div>' +
+    '<div class="card" style="padding:0">';
+  if (!items.length) {
+    html += '<div class="poi-item muted">Nog leeg — voeg hieronder iets toe.</div>';
+  }
+  // afgevinkte items zakken automatisch naar onderen (gedimd)
+  html += openItems.map(row).join('') + af.map(row).join('');
+  html += '<form class="add-step" data-shop-add="' + l.id + '">' +
+    '<input name="naam" placeholder="Item toevoegen…" autocomplete="off" required>' +
+    '<input name="hoeveelheid" class="shop-qty" placeholder="aantal" autocomplete="off">' +
+    '<button class="btn small" type="submit">+</button></form></div>';
+  html += '<div class="shop-actions">' +
+    '<button class="btn small secondary" data-shop-clear="' + l.id + '">Wis afgevinkte</button>' +
+    '<button class="btn small secondary" data-shop-savestd="' + l.id + '">Bewaar als standaard</button>' +
+    ((l.standard && l.standard.length)
+      ? '<button class="btn small secondary" data-shop-resetstd="' + l.id + '">Reset naar standaard</button>'
+      : '') +
+  '</div>';
+  return html;
+}
+
+function renderBoodschappen() {
+  let html = '<div class="list-head"><span class="section-label">Boodschappenlijsten</span>' +
+    '<button class="btn small" id="shop-new">+ Nieuwe lijst</button></div>';
+  if (!state.shoplists.length) {
+    html += '<div class="card muted" style="margin-bottom:4px">Nog geen boodschappenlijst. ' +
+      'Afvinken in de winkel is live te zien op het andere toestel.</div>';
+  }
+  html += state.shoplists.map(renderShoplist).join('');
+  return html;
+}
+
+function openShoplistSheet(onCreated) {
+  openSheet(
+    '<h2>Nieuwe boodschappenlijst</h2>' +
+    '<form id="shoplist-form">' +
+      '<label class="field"><span>Naam</span><input name="name" required value="Boodschappen" autocomplete="off"></label>' +
+      '<div class="sheet-actions">' +
+        '<button type="button" class="btn secondary" id="shoplist-cancel">Annuleren</button>' +
+        '<button type="submit" class="btn">Aanmaken</button>' +
+      '</div>' +
+    '</form>'
+  );
+  document.getElementById('shoplist-cancel').addEventListener('click', closeSheet);
+  document.getElementById('shoplist-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const name = String(new FormData(e.target).get('name') || '').trim() || 'Boodschappen';
+    const l = { id: uid(), name, items: [], standard: [] };
+    state.shoplists.push(l);
+    save(); closeSheet(); render();
+    if (typeof onCreated === 'function') onCreated(l);
+  });
+}
+
+function bindBoodschappen(main) {
+  const byId = (id) => state.shoplists.find((l) => l.id === id);
+  const nieuw = main.querySelector('#shop-new');
+  if (nieuw) nieuw.addEventListener('click', () => openShoplistSheet());
+  main.querySelectorAll('[data-shop-toggle]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const [lid, iid] = el.dataset.shopToggle.split(':');
+      const l = byId(lid); if (!l) return;
+      const it = l.items.find((x) => x.id === iid);
+      if (it) { it.done = !it.done; save(); render(); }
+    });
+  });
+  main.querySelectorAll('[data-shop-rm]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const [lid, iid] = btn.dataset.shopRm.split(':');
+      const l = byId(lid); if (!l) return;
+      l.items = l.items.filter((x) => x.id !== iid);
+      save(); render();
+    });
+  });
+  main.querySelectorAll('[data-shop-dellist]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const l = byId(btn.dataset.shopDellist); if (!l) return;
+      state.shoplists = state.shoplists.filter((x) => x.id !== l.id);
+      save(); render();
+      toast('Lijst “' + l.name + '” verwijderd');
+    });
+  });
+  main.querySelectorAll('[data-shop-clear]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const l = byId(btn.dataset.shopClear); if (!l) return;
+      const n = l.items.filter((x) => x.done).length;
+      if (!n) { toast('Er is niets afgevinkt.'); return; }
+      l.items = l.items.filter((x) => !x.done);
+      save(); render();
+      toast(n + ' afgevinkte regel' + (n === 1 ? '' : 's') + ' gewist');
+    });
+  });
+  main.querySelectorAll('[data-shop-savestd]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const l = byId(btn.dataset.shopSavestd); if (!l) return;
+      l.standard = (l.items || []).map((it) => ({
+        naam: it.naam, hoeveelheid: it.hoeveelheid || '',
+        gewichtG: Number(it.gewichtG) || 0, geschat: !!it.geschat,
+      }));
+      save(); render();
+      toast('Standaardlijst bewaard (' + l.standard.length + ' items)');
+    });
+  });
+  main.querySelectorAll('[data-shop-resetstd]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const l = byId(btn.dataset.shopResetstd); if (!l || !l.standard || !l.standard.length) return;
+      l.items = l.standard.map((s) => Object.assign({ id: uid(), done: false }, s));
+      save(); render();
+      toast('Hersteld naar standaard (' + l.items.length + ' items)');
+    });
+  });
+  main.querySelectorAll('form[data-shop-add]').forEach((form) => {
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const l = byId(form.dataset.shopAdd); if (!l) return;
+      const naam = form.elements.naam.value.trim();
+      if (!naam) return;
+      if (!Array.isArray(l.items)) l.items = [];
+      l.items.push(nieuwShopItem(naam, form.elements.hoeveelheid.value.trim()));
+      save(); render();
+    });
+  });
+}
+
 /* ============================== lijsten ============================== */
 function renderLijsten() {
-  return renderChecklist('vertrek', 'Vertrek') + renderChecklist('aankomst', 'Aankomst') +
+  return renderBoodschappen() +
+    renderChecklist('vertrek', 'Vertrek') + renderChecklist('aankomst', 'Aankomst') +
     renderChecklist('inpaklijst', 'Inpaklijst');
 }
 
@@ -1061,6 +1245,7 @@ function renderChecklist(key, title) {
 }
 
 function bindLijsten(main) {
+  bindBoodschappen(main);
   main.querySelectorAll('[data-toggle]').forEach((el) => {
     el.addEventListener('click', () => {
       const [key, id] = el.dataset.toggle.split(':');
@@ -1222,6 +1407,8 @@ function bindInstellingen(main) {
           aankomst: Array.isArray(parsed.checklists && parsed.checklists.aankomst) ? parsed.checklists.aankomst : d.checklists.aankomst,
           inpaklijst: Array.isArray(parsed.checklists && parsed.checklists.inpaklijst) ? parsed.checklists.inpaklijst : d.checklists.inpaklijst,
         },
+        shoplists: Array.isArray(parsed.shoplists) ? parsed.shoplists : [],
+        recipes: Array.isArray(parsed.recipes) ? parsed.recipes : [],
         settings: Object.assign({}, d.settings, parsed.settings || {}),
       };
       save(); render();

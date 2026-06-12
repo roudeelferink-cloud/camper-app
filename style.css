@@ -205,6 +205,12 @@ label.field > span {
   border-radius: 5px;
   transition: width 0.4s ease;
 }
+.weightbar-note {
+  font-size: 0.68rem;
+  color: var(--ink-soft);
+  margin-top: 4px;
+  text-align: right;
+}
 .weightbar .ok { background: var(--green); }
 .weightbar .over { background: var(--red); }
 .weight-over { color: var(--red); font-weight: 700; }
@@ -379,6 +385,24 @@ label.field > span {
   animation: spin 0.8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- boodschappenlijsten ---------- */
+.shop-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 14px;
+  border-top: 1px solid var(--line);
+}
+.shop-item:first-child { border-top: none; }
+.shop-item .label { flex: 1; min-width: 0; font-size: 0.93rem; font-weight: 600; cursor: pointer; }
+.shop-item .checkbox { cursor: pointer; }
+.shop-item.done { opacity: 0.55; }
+.shop-item.done .label { color: var(--ink-soft); text-decoration: line-through; }
+.shop-item.done .checkbox { background: var(--green); border-color: var(--green); }
+.shop-item.done .checkbox svg { opacity: 1; }
+.shop-kg { font-size: 0.7rem; color: var(--ink-soft); flex-shrink: 0; }
+.shop-kg.w-est { color: #b3aea2; }
+.shop-qty { width: 76px; flex: none !important; }
+.shop-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: -4px 0 16px; }
 
 /* ---------- checklists ---------- */
 .check-item {
