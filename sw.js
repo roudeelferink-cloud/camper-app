@@ -1,5 +1,5 @@
 // Camper Compagnon — service worker, cache-first, volledig offline.
-const VERSION = 'v1.2.0';
+const VERSION = 'v1.3.0';
 const CACHE_NAME = 'camper-compagnon-' + VERSION;
 
 const APP_SHELL = [
@@ -7,6 +7,7 @@ const APP_SHELL = [
   './index.html',
   './app.js',
   './weights.js',
+  './countries.js',
   './style.css',
   './manifest.json',
   './icon-192.png',

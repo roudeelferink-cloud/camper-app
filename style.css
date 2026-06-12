@@ -386,6 +386,31 @@ label.field > span {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ---------- onderweg-benodigdheden ---------- */
+.ow-vignet {
+  font-size: 0.7rem;
+  color: var(--ink-soft);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.ow-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 14px;
+  border-top: 1px solid var(--line);
+}
+.ow-item:first-of-type { border-top: none; }
+.ow-main { flex: 1; min-width: 0; cursor: pointer; }
+.ow-label { font-weight: 600; font-size: 0.92rem; }
+.ow-info { font-size: 0.76rem; color: var(--ink-soft); margin-top: 1px; }
+.ow-note { font-size: 0.72rem; color: #7c4e18; margin-top: 3px; }
+.ow-item.done .ow-label { color: var(--ink-soft); text-decoration: line-through; }
+.ow-item.nvt { opacity: 0.55; }
+.ow-seg { flex-shrink: 0; }
+.status-seg button.sel-open { background: var(--copper-soft); color: #7c4e18; }
+.status-seg button.sel-nvt { background: var(--ink-soft); color: #fff; }
+
 /* ---------- maaltijdplanner ---------- */
 .meal-row {
   display: flex; align-items: center; gap: 10px;

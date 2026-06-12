@@ -3,6 +3,7 @@
 'use strict';
 
 import { schatGewicht } from './weights.js';
+import { EU_LANDEN, LAND_INFO } from './countries.js';
 
 /* ============================== config ============================== */
 // Firebase (sync tussen de toestellen van één huishouden)
@@ -879,9 +880,13 @@ function renderTripDetail() {
     '<div class="subtabs">' +
       '<button data-sub="paklijst" class="' + (sub === 'paklijst' ? 'active' : '') + '">Paklijst</button>' +
       '<button data-sub="eten" class="' + (sub === 'eten' ? 'active' : '') + '">Eten</button>' +
+      '<button data-sub="onderweg" class="' + (sub === 'onderweg' ? 'active' : '') + '">Onderweg</button>' +
       '<button data-sub="omgeving" class="' + (sub === 'omgeving' ? 'active' : '') + '">Omgeving</button>' +
     '</div>';
-  html += sub === 'omgeving' ? renderOmgeving(t) : (sub === 'eten' ? renderEten(t) : renderPaklijst(t));
+  if (sub === 'omgeving') html += renderOmgeving(t);
+  else if (sub === 'eten') html += renderEten(t);
+  else if (sub === 'onderweg') html += renderOnderweg(t);
+  else html += renderPaklijst(t);
   return html;
 }
 
@@ -915,6 +920,163 @@ function renderPaklijst(t) {
       }).join('') + '</div>';
   }
   return html;
+}
+
+/* ---------- onderweg-benodigdheden (subtab Onderweg) ---------- */
+function nieuwOnderwegLand(naam) {
+  const info = LAND_INFO[naam];
+  return {
+    naam,
+    items: info
+      ? info.items.map((it) => ({
+          id: uid(), label: it.label, info: it.info || '',
+          status: 'open', notitie: '', custom: false,
+        }))
+      : [],
+  };
+}
+
+// Eerste keer: land van de reisbestemming voorinvullen als startsuggestie.
+// Daarna nooit meer automatisch toevoegen (doorreis = handmatig beheren).
+function ensureOnderweg(t) {
+  if (t.onderweg) return;
+  t.onderweg = { landen: [] };
+  const land = String(t.country || '').trim().toLowerCase();
+  const match = EU_LANDEN.find((n) => n.toLowerCase() === land);
+  if (match) t.onderweg.landen.push(nieuwOnderwegLand(match));
+  save();
+}
+
+function renderOnderweg(t) {
+  ensureOnderweg(t);
+  const landen = t.onderweg.landen;
+  let html = '<div class="alert info" style="font-size:0.83rem">Richtlijn, geen juridisch advies — ' +
+    'controleer de actuele eisen per land zelf (bv. anwb.nl). Geen prijzen of tarieven.</div>';
+  const beschikbaar = EU_LANDEN.filter((n) => !landen.some((l) => l.naam === n));
+  html += '<div class="code-row" style="margin-bottom:16px"><select id="ow-land-select">' +
+    '<option value="">— kies een land —</option>' +
+    beschikbaar.map((n) => '<option>' + esc(n) + '</option>').join('') +
+    '</select><button class="btn small" id="ow-land-add">Voeg toe</button></div>';
+  if (!landen.length) {
+    html += '<div class="empty"><span class="big">🛂</span>Nog geen landen — voeg de landen toe waar je doorheen rijdt.</div>';
+  }
+  for (let li = 0; li < landen.length; li++) {
+    const l = landen[li];
+    const info = LAND_INFO[l.naam];
+    const relevant = l.items.filter((it) => it.status !== 'nvt');
+    const klaar = l.items.filter((it) => it.status === 'gedaan').length;
+    html += '<div class="list-head"><span class="section-label">' + esc(l.naam) +
+      ' <span class="mono" style="text-transform:none;letter-spacing:0">' + klaar + ' van ' + relevant.length + ' geregeld</span></span>' +
+      '<button class="icon-btn" data-ow-delland="' + li + '" aria-label="Land verwijderen">✕</button></div>' +
+      '<div class="card" style="padding:0">';
+    html += '<div class="ow-vignet mono">' +
+      esc(info ? info.vignet : 'Geen vaste items voor dit land — vul hieronder zelf aan.') + '</div>';
+    html += l.items.map((it) => {
+      const st = it.status || 'open';
+      return '<div class="ow-item' + (st === 'gedaan' ? ' done' : '') + (st === 'nvt' ? ' nvt' : '') + '">' +
+        '<div class="ow-main" data-ow-edit="' + li + ':' + it.id + '">' +
+          '<div class="ow-label">' + esc(it.label) + '</div>' +
+          (it.info ? '<div class="ow-info">' + esc(it.info) + '</div>' : '') +
+          (it.notitie ? '<div class="ow-note mono">✎ ' + esc(it.notitie) + '</div>' : '') +
+        '</div>' +
+        '<div class="status-seg ow-seg" data-ow-land="' + li + '" data-ow-item="' + it.id + '">' +
+          '<button data-ow-st="open" class="' + (st === 'open' ? 'sel-open' : '') + '">☐</button>' +
+          '<button data-ow-st="gedaan" class="' + (st === 'gedaan' ? 'sel-vol' : '') + '">✓</button>' +
+          '<button data-ow-st="nvt" class="' + (st === 'nvt' ? 'sel-nvt' : '') + '">n.v.t.</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    html += '<form class="add-step" data-ow-add="' + li + '">' +
+      '<input name="label" placeholder="Eigen item toevoegen…" autocomplete="off" required>' +
+      '<button class="btn small" type="submit">+</button></form></div>';
+  }
+  return html;
+}
+
+// Notitie (en bij eigen items: naam/verwijderen) bewerken via bottom sheet.
+function openOwItemSheet(t, landIdx, itemId) {
+  const land = t.onderweg.landen[landIdx];
+  const item = land && land.items.find((x) => x.id === itemId);
+  if (!item) return;
+  openSheet(
+    '<h2>' + esc(item.custom ? 'Eigen item' : item.label) + '</h2>' +
+    '<form id="ow-form">' +
+      (item.custom
+        ? '<label class="field"><span>Omschrijving</span><input name="label" required value="' + esc(item.label) + '" autocomplete="off"></label>'
+        : (item.info ? '<p class="muted" style="margin-top:0">' + esc(item.info) + '</p>' : '')) +
+      '<label class="field"><span>Notitie (bv. gekocht op…, geldig t/m…, referentie)</span>' +
+        '<textarea name="notitie" rows="3">' + esc(item.notitie || '') + '</textarea></label>' +
+      '<div class="sheet-actions">' +
+        (item.custom ? '<button type="button" class="btn danger" id="ow-del">Verwijderen</button>' : '') +
+        '<button type="button" class="btn secondary" id="ow-cancel">Annuleren</button>' +
+        '<button type="submit" class="btn">Opslaan</button>' +
+      '</div>' +
+    '</form>'
+  );
+  document.getElementById('ow-cancel').addEventListener('click', closeSheet);
+  const delBtn = document.getElementById('ow-del');
+  if (delBtn) {
+    delBtn.addEventListener('click', () => {
+      land.items = land.items.filter((x) => x.id !== item.id);
+      save(); closeSheet(); render();
+      toast('Item verwijderd');
+    });
+  }
+  document.getElementById('ow-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    if (item.custom) {
+      const label = String(f.get('label') || '').trim();
+      if (label) item.label = label;
+    }
+    item.notitie = String(f.get('notitie') || '').trim();
+    save(); closeSheet(); render();
+  });
+}
+
+function bindOnderweg(main, t) {
+  const addBtn = main.querySelector('#ow-land-add');
+  if (!addBtn) return; // subtab niet actief
+  addBtn.addEventListener('click', () => {
+    const sel = main.querySelector('#ow-land-select');
+    const naam = sel.value;
+    if (!naam) { toast('Kies eerst een land.'); return; }
+    t.onderweg.landen.push(nieuwOnderwegLand(naam));
+    save(); render();
+  });
+  main.querySelectorAll('[data-ow-delland]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const l = t.onderweg.landen[Number(btn.dataset.owDelland)];
+      if (!l) return;
+      t.onderweg.landen.splice(Number(btn.dataset.owDelland), 1);
+      save(); render();
+      toast('“' + l.naam + '” verwijderd uit deze reis');
+    });
+  });
+  main.querySelectorAll('.ow-seg button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const seg = btn.closest('.ow-seg');
+      const land = t.onderweg.landen[Number(seg.dataset.owLand)];
+      const item = land && land.items.find((x) => x.id === seg.dataset.owItem);
+      if (item) { item.status = btn.dataset.owSt; save(); render(); }
+    });
+  });
+  main.querySelectorAll('[data-ow-edit]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const [li, iid] = el.dataset.owEdit.split(':');
+      openOwItemSheet(t, Number(li), iid);
+    });
+  });
+  main.querySelectorAll('form[data-ow-add]').forEach((form) => {
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const land = t.onderweg.landen[Number(form.dataset.owAdd)];
+      const label = form.elements.label.value.trim();
+      if (!land || !label) return;
+      land.items.push({ id: uid(), label, info: '', status: 'open', notitie: '', custom: true });
+      save(); render();
+    });
+  });
 }
 
 /* ---------- maaltijdplanner (subtab Eten) ---------- */
@@ -1360,6 +1522,7 @@ function bindTripDetail(main) {
   main.querySelectorAll('[data-meal-dag]').forEach((el) => {
     el.addEventListener('click', () => openMealSheet(t, el.dataset.mealDag, el.dataset.mealSlot));
   });
+  bindOnderweg(main, t);
   const rolAlles = main.querySelector('#rol-alles');
   if (rolAlles) rolAlles.addEventListener('click', () => rolMaaltijden(t, kookEntries(t)));
 }
