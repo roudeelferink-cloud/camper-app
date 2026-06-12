@@ -23,21 +23,12 @@ alle data staat in `localStorage` op je eigen toestel.
 - Verwijder je de app of wis je websitedata in Safari, dan is de data weg —
   exporteer dus af en toe.
 
-## AI-reisadvies (optioneel)
+## Omgeving per reis
 
-De sectie "Advies & POI" per reis kan met websearch actueel advies ophalen
-(weer, meeneemtips, camperregels zoals milieuzones en vignetten, plus
-adressen van supermarkten, LPG, camperservice en camperplaatsen).
-
-Daarvoor is een Anthropic API-key nodig:
-
-1. Maak een account op https://console.anthropic.com
-2. Maak onder **API Keys** een nieuwe key aan (en zet er een klein
-   bestedingslimiet op)
-3. Plak de key in de app onder ⚙ Instellingen → AI-advies
-
-De key wordt alleen in `localStorage` op je toestel bewaard en wordt
-uitsluitend rechtstreeks naar de Anthropic-API gestuurd.
+Per reis haalt het tabblad "Omgeving" via Geoapify (OpenStreetMap-data) de
+locatie van de camping op plus POI's in de buurt: eten & drinken, strand &
+natuur, supermarkten en bezienswaardigheden. De resultaten worden bij de
+reis opgeslagen, dus eenmaal opgehaald werkt het ook offline.
 
 ## Techniek
 

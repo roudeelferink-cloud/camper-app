@@ -6,8 +6,10 @@
 // beperk hem in het Geoapify-dashboard tot het Pages-domein.
 const GEOAPIFY_KEY = 'e74e117b64814add803ad6c80d5557db';
 const GEOAPIFY_RADIUS_M = 10000; // zoekstraal rond de camping, in meters
+const OMGEVING_MAX_ZICHTBAAR = 5; // per groep eerst dit aantal tonen, rest achter "Toon meer"
 const OMGEVING_GROEPEN = [
-  { titel: 'Eten & drinken', categories: 'catering.restaurant,catering.cafe' },
+  // zonder: hotels e.d. (accommodation.*) weren — die taggen vaak ook catering
+  { titel: 'Eten & drinken', categories: 'catering.restaurant,catering.cafe', zonder: 'accommodation' },
   { titel: 'Strand & natuur', categories: 'beach,natural' },
   { titel: 'Boodschappen', categories: 'commercial.supermarket' },
   { titel: 'Bezienswaardigheden', categories: 'tourism.sights,tourism.attraction' },
@@ -20,8 +22,6 @@ const CATEGORIES = [
   'Keuken', 'Slapen', 'Kleding', 'Techniek & stroom', 'Sanitair',
   'Gereedschap', 'Buiten & luifel', 'Veiligheid', 'Eten & voorraad', 'Overig',
 ];
-
-const POI_CATS = ['supermarkt', 'tankstation', 'lpg', 'camperservice', 'camperplaats', 'overig'];
 
 const INPAKLIJST_DEFAULT = [
   ['Reisdocumenten', [
@@ -120,7 +120,7 @@ function defaultState() {
       ].map((label) => ({ id: uid(), label, done: false })),
       inpaklijst: defaultInpaklijst(),
     },
-    settings: { laadvermogen: 250, mtm: 0, leeg: 0, apiKey: '', lastExport: null },
+    settings: { laadvermogen: 250, mtm: 0, leeg: 0, lastExport: null },
   };
 }
 
@@ -216,12 +216,10 @@ const CHEV_SVG = '<svg class="chev" width="15" height="15" viewBox="0 0 24 24" a
 const ui = {
   tab: 'voorraad',
   collapsedCats: new Set(),
-  tripView: null,        // { id, subtab: 'paklijst' | 'advies' }
-  poiFilter: 'alle',
-  adviesBusy: false,
-  adviesError: null,
+  tripView: null,        // { id, subtab: 'paklijst' | 'omgeving' }
   omgevingBusy: false,
   omgevingError: null,
+  omgevingOpen: new Set(), // groepstitels waarvan alle POI's uitgeklapt zijn
 };
 
 /* ============================== bottom sheet ============================== */
@@ -511,9 +509,8 @@ function bindReizen(main) {
   main.querySelectorAll('.trip-card').forEach((card) => {
     card.addEventListener('click', () => {
       ui.tripView = { id: card.dataset.trip, subtab: 'paklijst' };
-      ui.poiFilter = 'alle';
-      ui.adviesError = null;
       ui.omgevingError = null;
+      ui.omgevingOpen = new Set();
       render();
     });
   });
@@ -568,7 +565,7 @@ function openTripSheet(id) {
       if (t.camping !== data.camping && t.omgeving) t.omgeving = null;
       Object.assign(t, data);
     } else {
-      state.trips.push(Object.assign({ id: uid(), packed: {}, advies: null, poi: null, adviesDate: null, omgeving: null }, data));
+      state.trips.push(Object.assign({ id: uid(), packed: {}, omgeving: null }, data));
     }
     save(); closeSheet(); render();
   });
@@ -588,9 +585,8 @@ function renderTripDetail() {
     '<div class="subtabs">' +
       '<button data-sub="paklijst" class="' + (sub === 'paklijst' ? 'active' : '') + '">Paklijst</button>' +
       '<button data-sub="omgeving" class="' + (sub === 'omgeving' ? 'active' : '') + '">Omgeving</button>' +
-      '<button data-sub="advies" class="' + (sub === 'advies' ? 'active' : '') + '">Advies &amp; POI</button>' +
     '</div>';
-  html += sub === 'paklijst' ? renderPaklijst(t) : (sub === 'omgeving' ? renderOmgeving(t) : renderAdvies(t));
+  html += sub === 'omgeving' ? renderOmgeving(t) : renderPaklijst(t);
   return html;
 }
 
@@ -626,50 +622,6 @@ function renderPaklijst(t) {
   return html;
 }
 
-function renderAdvies(t) {
-  if (!state.settings.apiKey) {
-    return '<div class="card"><strong>Advies &amp; POI</strong>' +
-      '<p class="muted">Vul eerst een Anthropic API-key in bij Instellingen (⚙). ' +
-      'Daarna kan de app per reis actueel advies en handige adressen ophalen.</p></div>';
-  }
-  let html = '';
-  if (ui.adviesError) {
-    html += '<div class="alert danger"><h3>Ophalen mislukt</h3><p>' + esc(ui.adviesError) + '</p></div>';
-  }
-  if (ui.adviesBusy) {
-    html += '<button class="btn block" disabled><span class="spinner"></span>Bezig met ophalen…</button>';
-  } else {
-    html += '<button class="btn block" id="fetch-advies">' +
-      (t.advies ? 'Opnieuw ophalen' : 'Advies &amp; POI ophalen') + '</button>';
-  }
-  if (t.advies) {
-    const a = t.advies;
-    html += '<p class="muted mono" style="margin:10px 2px">Opgehaald op ' + fmtDate(t.adviesDate) + '</p>' +
-      '<div class="card advies-blok">' +
-        (a.seizoen ? '<h4>Seizoen</h4><p>' + esc(a.seizoen) + '</p>' : '') +
-        (Array.isArray(a.meenemen) && a.meenemen.length ? '<h4>Meenemen</h4><ul>' + a.meenemen.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '') +
-        (Array.isArray(a.thuislaten) && a.thuislaten.length ? '<h4>Thuislaten</h4><ul>' + a.thuislaten.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '') +
-        (Array.isArray(a.regels) && a.regels.length ? '<h4>Regels &amp; aandachtspunten</h4><ul>' + a.regels.map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '') +
-      '</div>';
-  }
-  if (Array.isArray(t.poi) && t.poi.length) {
-    const cats = ['alle'].concat(POI_CATS.filter((c) => t.poi.some((p) => p.categorie === c)));
-    html += '<div class="section-label">In de buurt</div>' +
-      '<div class="chips">' + cats.map((c) =>
-        '<button class="chip' + (ui.poiFilter === c ? ' active' : '') + '" data-chip="' + c + '">' + esc(c) + '</button>'
-      ).join('') + '</div>';
-    const shown = t.poi.filter((p) => ui.poiFilter === 'alle' || p.categorie === ui.poiFilter);
-    html += '<div class="card" style="padding:0">' +
-      (shown.length ? shown.map((p) =>
-        '<div class="poi-item"><span class="cat">' + esc(p.categorie || 'overig') + '</span>' +
-        '<div class="name">' + esc(p.naam) + '</div>' +
-        '<div class="detail">' + esc(p.adres || '') + (p.opmerking ? ' — ' + esc(p.opmerking) : '') + '</div></div>'
-      ).join('') : '<div class="poi-item muted">Niets in deze categorie.</div>') +
-    '</div>';
-  }
-  return html;
-}
-
 /* ---------- omgeving (Geoapify) ---------- */
 function fmtAfstand(m) {
   if (m < 1000) return m + ' m';
@@ -699,11 +651,14 @@ function renderOmgeving(t) {
       ' · straal ' + (GEOAPIFY_RADIUS_M / 1000) + ' km · ' +
       '<a href="https://www.google.com/maps?q=' + o.lat + ',' + o.lon + '" target="_blank" rel="noopener">open in kaart</a></p></div>';
     for (const g of o.groepen) {
+      const open = ui.omgevingOpen.has(g.titel);
+      const zichtbaar = open ? g.items : g.items.slice(0, OMGEVING_MAX_ZICHTBAAR);
+      const rest = g.items.length - OMGEVING_MAX_ZICHTBAAR;
       html += '<div class="section-label">' + esc(g.titel) + '</div><div class="card" style="padding:0">';
       if (!g.items.length) {
         html += '<div class="poi-item muted">Niets gevonden binnen ' + (GEOAPIFY_RADIUS_M / 1000) + ' km.</div>';
       } else {
-        html += g.items.map((p) =>
+        html += zichtbaar.map((p) =>
           '<div class="poi-item" style="display:flex;align-items:center;gap:10px">' +
             '<div style="flex:1;min-width:0"><div class="name">' + esc(p.naam) + '</div>' +
             '<div class="detail mono">' + fmtAfstand(p.afstandM) + '</div></div>' +
@@ -711,6 +666,10 @@ function renderOmgeving(t) {
             '" target="_blank" rel="noopener" style="text-decoration:none">kaart</a>' +
           '</div>'
         ).join('');
+        if (rest > 0) {
+          html += '<button class="poi-more" data-meer="' + esc(g.titel) + '">' +
+            (open ? 'Toon minder' : 'Toon meer (' + rest + ')') + '</button>';
+        }
       }
       html += '</div>';
     }
@@ -744,6 +703,7 @@ async function zoekOmgeving(t) {
         titel: g.titel,
         items: (data.features || [])
           .filter((f) => f.properties && f.properties.name)
+          .filter((f) => !g.zonder || !(f.properties.categories || []).some((c) => c.indexOf(g.zonder) === 0))
           .map((f) => ({
             naam: f.properties.name,
             afstandM: Math.round(f.properties.distance || 0),
@@ -753,6 +713,7 @@ async function zoekOmgeving(t) {
       };
     }));
     t.omgeving = { lat, lon, adres: feat.properties.formatted || tekst, datum: todayISO(), groepen };
+    ui.omgevingOpen = new Set();
     save();
   } catch (e) {
     ui.omgevingError = (e && e.message) ? e.message : 'Onbekende fout. Controleer je internetverbinding.';
@@ -777,89 +738,16 @@ function bindTripDetail(main) {
       save(); render();
     });
   });
-  main.querySelectorAll('[data-chip]').forEach((btn) => {
-    btn.addEventListener('click', () => { ui.poiFilter = btn.dataset.chip; render(); });
+  main.querySelectorAll('[data-meer]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const titel = btn.dataset.meer;
+      if (ui.omgevingOpen.has(titel)) ui.omgevingOpen.delete(titel);
+      else ui.omgevingOpen.add(titel);
+      render();
+    });
   });
-  const fetchBtn = main.querySelector('#fetch-advies');
-  if (fetchBtn) fetchBtn.addEventListener('click', () => fetchAdvies(t));
   const omgevingBtn = main.querySelector('#zoek-omgeving');
   if (omgevingBtn) omgevingBtn.addEventListener('click', () => zoekOmgeving(t));
-}
-
-/* ---------- Anthropic API ---------- */
-function adviesPrompt(t) {
-  return 'Je bent reisassistent voor een Nederlands camperstel (Notin Progress Sevilla). ' +
-    'Bestemming: ' + t.place + ', ' + t.country + '. ' +
-    'Periode: ' + t.startDate + ' tot ' + t.endDate + ' (seizoen zelf afleiden). ' +
-    'Zoek actuele lokale info via web search. ' +
-    'Antwoord UITSLUITEND met geldige JSON, geen markdown: ' +
-    '{"advies":{"seizoen":"1 zin over weer/klimaat daar in dit seizoen",' +
-    '"meenemen":[4-7 concrete spullen specifiek voor deze regio en dit seizoen],' +
-    '"thuislaten":[1-3 dingen die nu overbodig zijn],' +
-    '"regels":[2-5 camperspecifieke aandachtspunten: milieuzones/Crit\'Air, vignet/tol, ' +
-    'gasaansluiting per land, lozen grijs/zwart water, hoogtebeperkingen, overnachtingsregels]},' +
-    '"poi":[6-12 echte plekken nabij de bestemming, elk {"naam":"","categorie":"supermarkt|tankstation|lpg|' +
-    'camperservice|camperplaats|overig","adres":"kort","opmerking":"kort"}]}';
-}
-
-async function fetchAdvies(t) {
-  ui.adviesBusy = true;
-  ui.adviesError = null;
-  render();
-  try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': state.settings.apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1500,
-        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        messages: [{ role: 'user', content: adviesPrompt(t) }],
-      }),
-    });
-    if (!res.ok) {
-      let detail = 'HTTP ' + res.status;
-      try {
-        const err = await res.json();
-        if (err && err.error && err.error.message) detail = err.error.message;
-      } catch (e) { /* geen JSON */ }
-      throw new Error(res.status === 401 ? 'API-key ongeldig (controleer Instellingen).' : detail);
-    }
-    const data = await res.json();
-    const text = (data.content || [])
-      .filter((b) => b.type === 'text')
-      .map((b) => b.text)
-      .join('\n');
-    const parsed = parseAdviesJSON(text);
-    t.advies = parsed.advies || null;
-    t.poi = Array.isArray(parsed.poi) ? parsed.poi : [];
-    t.adviesDate = todayISO();
-    ui.poiFilter = 'alle';
-    save();
-  } catch (e) {
-    ui.adviesError = (e && e.message) ? e.message : 'Onbekende fout. Controleer je internetverbinding.';
-  } finally {
-    ui.adviesBusy = false;
-    render();
-  }
-}
-
-function parseAdviesJSON(text) {
-  let s = String(text || '').trim();
-  s = s.replace(/```(?:json)?/gi, '');           // codefences strippen
-  const a = s.indexOf('{');
-  const b = s.lastIndexOf('}');
-  if (a === -1 || b === -1 || b <= a) throw new Error('Geen bruikbaar antwoord ontvangen — probeer het opnieuw.');
-  try {
-    return JSON.parse(s.slice(a, b + 1));
-  } catch (e) {
-    throw new Error('Antwoord kon niet gelezen worden — probeer het opnieuw.');
-  }
 }
 
 /* ============================== lijsten ============================== */
@@ -949,15 +837,6 @@ function renderInstellingen() {
       '</div>' +
       '<button class="btn small secondary" id="set-diff">Verschil overnemen als laadvermogen</button>' +
     '</div>' +
-    '<div class="section-label">AI-advies</div>' +
-    '<div class="card">' +
-      '<label class="field"><span>Anthropic API-key</span>' +
-        '<input id="set-apikey" type="password" autocomplete="off" placeholder="sk-ant-…" value="' + esc(s.apiKey) + '"></label>' +
-      '<p class="muted">De key wordt alleen op dit toestel bewaard (localStorage) en verlaat het toestel niet — ' +
-      'behalve rechtstreeks richting Anthropic bij het ophalen van advies. ' +
-      'Zodra dit veld gevuld is, verschijnt per reis de sectie “Advies &amp; POI”. ' +
-      'Een key maak je aan op console.anthropic.com.</p>' +
-    '</div>' +
     '<div class="section-label">Back-up</div>' +
     '<div class="card">' +
       '<p class="muted" style="margin-top:0">Laatste export: <span class="mono">' +
@@ -984,10 +863,6 @@ function bindInstellingen(main) {
     state.settings.laadvermogen = diff;
     save(); render();
     toast('Laadvermogen gezet op ' + fmtKg(diff) + ' kg');
-  });
-  main.querySelector('#set-apikey').addEventListener('change', (e) => {
-    state.settings.apiKey = e.target.value.trim();
-    save(); toast(state.settings.apiKey ? 'API-key opgeslagen (alleen op dit toestel)' : 'API-key verwijderd');
   });
   main.querySelector('#btn-export').addEventListener('click', () => {
     state.settings.lastExport = new Date().toISOString();

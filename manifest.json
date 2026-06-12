@@ -1,7 +1,7 @@
 {
   "name": "Camper Compagnon",
   "short_name": "Camper",
-  "description": "Voorraad, paklijsten en reisadvies voor de camper. Alle data lokaal op je toestel.",
+  "description": "Voorraad, paklijsten en omgevingsinfo voor de camper. Alle data lokaal op je toestel.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

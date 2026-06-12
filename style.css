@@ -340,36 +340,20 @@ label.field > span {
 .pack-counter { font-family: var(--font-mono); font-size: 0.74rem; color: var(--ink-soft); }
 
 /* ---------- POI ---------- */
-.chips { display: flex; gap: 7px; flex-wrap: wrap; margin: 10px 0 12px; }
-.chip {
-  border: 1px solid var(--line);
-  background: var(--card);
-  border-radius: 99px;
-  font-family: var(--font-mono); font-size: 0.7rem; font-weight: 600;
-  padding: 6px 11px;
-  cursor: pointer;
-  color: var(--ink-soft);
-}
-.chip.active { background: var(--copper); border-color: var(--copper); color: #fff; }
 .poi-item { padding: 10px 14px; border-top: 1px solid var(--line); }
 .poi-item:first-child { border-top: none; }
 .poi-item .name { font-weight: 700; font-size: 0.92rem; }
-.poi-item .cat {
-  font-family: var(--font-mono); font-size: 0.64rem; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--copper);
-}
 .poi-item .detail { font-size: 0.83rem; color: var(--ink-soft); margin-top: 2px; }
-.advies-blok h4 {
-  margin: 12px 0 4px;
-  font-family: var(--font-mono); font-size: 0.7rem; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.08em;
+.poi-more {
+  width: 100%;
+  background: none;
+  border: none; border-top: 1px solid var(--line);
   color: var(--copper);
+  font-family: var(--font-ui); font-size: 0.85rem; font-weight: 700;
+  padding: 11px 14px;
+  cursor: pointer;
 }
-.advies-blok h4:first-child { margin-top: 0; }
-.advies-blok ul { margin: 2px 0 0; padding-left: 19px; font-size: 0.88rem; }
-.advies-blok li { margin-bottom: 3px; }
-.advies-blok p { margin: 2px 0 0; font-size: 0.88rem; }
+.poi-more:active { background: var(--copper-soft); }
 
 .spinner {
   width: 19px; height: 19px;
