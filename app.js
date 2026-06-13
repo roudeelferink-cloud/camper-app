@@ -912,6 +912,7 @@ function renderTripDetail() {
       '<div class="dates">' + fmtDate(t.startDate) + ' → ' + fmtDate(t.endDate) + '</div>' +
       (t.notes ? '<div class="trip-notes">' + esc(t.notes) + '</div>' : '') +
     '</div>' +
+    renderWeer(t) +
     '<div class="subtabs">' +
       '<button data-sub="paklijst" class="' + (sub === 'paklijst' ? 'active' : '') + '">Paklijst</button>' +
       '<button data-sub="eten" class="' + (sub === 'eten' ? 'active' : '') + '">Eten</button>' +
@@ -1576,6 +1577,7 @@ function bindTripDetail(main) {
   bindOnderweg(main, t);
   const rolAlles = main.querySelector('#rol-alles');
   if (rolAlles) rolAlles.addEventListener('click', () => rolMaaltijden(t, kookEntries(t)));
+  laadWeer(t);
 }
 
 /* ============================== boodschappenlijsten ============================== */
@@ -1902,7 +1904,7 @@ function renderInstellingen() {
         '<textarea id="import-area" rows="3" placeholder="{ … }"></textarea></label>' +
       '<button class="btn block secondary" id="btn-import">Importeer</button>' +
     '</div>' +
-    '<p class="muted" style="text-align:center">Camper Compagnon v1.1.0 · gedeeld via huishoud-code, offline blijft alles werken</p>';
+    '<p class="muted" style="text-align:center">Camper Compagnon v1.2.0 · gedeeld via huishoud-code, offline blijft alles werken</p>';
 }
 
 function bindInstellingen(main) {
@@ -2189,6 +2191,174 @@ function bindCamper(main) {
       if (field) field.classList.toggle('spec-empty', !inp.value.trim());
     });
   });
+}
+
+/* ============================== weer (Open-Meteo) ============================== */
+const WEER_CACHE_PREFIX = 'camper:weer:';
+const WEER_CACHE_TTL_MS = 3600000; // 1 uur
+
+const WEERCODE = {
+  0:  ['☀️', 'Helder'],
+  1:  ['🌤️', 'Overwegend helder'],
+  2:  ['⛅', 'Deels bewolkt'],
+  3:  ['☁️', 'Bewolkt'],
+  45: ['🌫️', 'Mist'],
+  48: ['🌫️', 'Rijpige mist'],
+  51: ['🌦️', 'Lichte motregen'],
+  53: ['🌦️', 'Motregen'],
+  55: ['🌧️', 'Dichte motregen'],
+  61: ['🌧️', 'Lichte regen'],
+  63: ['🌧️', 'Regen'],
+  65: ['🌧️', 'Zware regen'],
+  71: ['🌨️', 'Lichte sneeuw'],
+  73: ['🌨️', 'Sneeuw'],
+  75: ['❄️', 'Zware sneeuw'],
+  77: ['🌨️', 'Sneeuwkorrels'],
+  80: ['🌦️', 'Buien'],
+  81: ['🌧️', 'Stevige buien'],
+  82: ['🌧️', 'Zware buien'],
+  85: ['🌨️', 'Sneeuwbuien'],
+  86: ['❄️', 'Zware sneeuwbuien'],
+  95: ['⛈️', 'Onweer'],
+  96: ['⛈️', 'Onweer met hagel'],
+  99: ['⛈️', 'Zware hagel'],
+};
+
+function weerCacheKey(lat, lon) {
+  return WEER_CACHE_PREFIX + Number(lat).toFixed(2) + ':' + Number(lon).toFixed(2);
+}
+
+function leesWeerCache(lat, lon) {
+  try {
+    const raw = localStorage.getItem(weerCacheKey(lat, lon));
+    if (!raw) return null;
+    const e = JSON.parse(raw);
+    return (e && e.ts && Array.isArray(e.days)) ? e : null;
+  } catch (_) { return null; }
+}
+
+function schrijfWeerCache(lat, lon, days) {
+  try { localStorage.setItem(weerCacheKey(lat, lon), JSON.stringify({ ts: Date.now(), days })); }
+  catch (_) { /* opslag vol */ }
+}
+
+function weerVensterDagen(t) {
+  const today = todayISO();
+  const d9 = new Date(today + 'T12:00:00');
+  d9.setDate(d9.getDate() + 9);
+  const windowEnd = d9.getFullYear() + '-' + String(d9.getMonth() + 1).padStart(2, '0') + '-' + String(d9.getDate()).padStart(2, '0');
+
+  function tenDays() {
+    const out = [];
+    const d = new Date(today + 'T12:00:00');
+    for (let i = 0; i < 10; i++) {
+      out.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'));
+      d.setDate(d.getDate() + 1);
+    }
+    return out;
+  }
+
+  if (!t.startDate) return { type: 'days', days: tenDays() };
+
+  const toStart = daysUntil(t.startDate);
+  if (toStart !== null && toStart > 10) return { type: 'tever', n: toStart - 10 };
+
+  const overlap = tripDays(t).filter((d) => d >= today && d <= windowEnd);
+  return { type: 'days', days: overlap.length ? overlap : tenDays() };
+}
+
+const weerBezig = new Set();
+const weerMislukt = new Set();
+
+function renderWeer(t) {
+  const lat = t.omgeving && t.omgeving.lat != null ? t.omgeving.lat : null;
+  const lon = t.omgeving && t.omgeving.lon != null ? t.omgeving.lon : null;
+
+  if (lat == null || lon == null) {
+    return '<div class="weer-blok"><span class="muted" style="font-size:0.83rem">Geen locatie bekend voor deze reis.</span></div>';
+  }
+
+  const venster = weerVensterDagen(t);
+  if (venster.type === 'tever') {
+    const dag = venster.n === 1 ? 'dag' : 'dagen';
+    return '<div class="weer-blok"><span class="muted" style="font-size:0.83rem">Voorspelling beschikbaar vanaf ' + venster.n + ' ' + dag + ' voor vertrek</span></div>';
+  }
+
+  const key = weerCacheKey(lat, lon);
+  const cache = leesWeerCache(lat, lon);
+
+  if (!cache) {
+    return weerMislukt.has(key)
+      ? '<div class="weer-blok"><span class="muted" style="font-size:0.83rem">Weer nu niet beschikbaar</span></div>'
+      : '<div class="weer-blok"><span class="muted" style="font-size:0.83rem">Weer ophalen…</span></div>';
+  }
+
+  const tegels = venster.days.map((iso) => {
+    const d = cache.days.find((x) => x.iso === iso);
+    if (!d) return '';
+    const wc = WEERCODE[d.weercode] || ['🌡️', 'Onbekend'];
+    const dagLabel = new Date(iso + 'T12:00:00').toLocaleDateString('nl-NL', { weekday: 'short', day: 'numeric' });
+    const maxT = d.maxTemp != null ? Math.round(d.maxTemp) + '°' : '—';
+    const minT = d.minTemp != null ? Math.round(d.minTemp) + '°' : '—';
+    const neerslag = d.neerslagKans != null ? d.neerslagKans + '%' : '';
+    return '<div class="weer-tegel" title="' + esc(wc[1]) + '">' +
+      '<div class="wt-dag">' + esc(dagLabel) + '</div>' +
+      '<div class="wt-icoon">' + wc[0] + '</div>' +
+      '<div class="wt-temp"><span class="wt-max">' + maxT + '</span><span class="wt-min">' + minT + '</span></div>' +
+      (neerslag ? '<div class="wt-neerslag">' + neerslag + '</div>' : '') +
+    '</div>';
+  }).filter(Boolean).join('');
+
+  if (!tegels) {
+    return '<div class="weer-blok"><span class="muted" style="font-size:0.83rem">Geen weerdata beschikbaar voor deze periode.</span></div>';
+  }
+
+  const stale = (Date.now() - cache.ts) > WEER_CACHE_TTL_MS;
+  return '<div class="weer-blok">' +
+    (stale ? '<div class="weer-bijgewerkt">bijgewerkt om ' + new Date(cache.ts).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' }) + '</div>' : '') +
+    '<div class="weer-rij">' + tegels + '</div>' +
+  '</div>';
+}
+
+async function laadWeer(t) {
+  const lat = t.omgeving && t.omgeving.lat != null ? t.omgeving.lat : null;
+  const lon = t.omgeving && t.omgeving.lon != null ? t.omgeving.lon : null;
+  if (lat == null || lon == null) return;
+
+  const venster = weerVensterDagen(t);
+  if (venster.type === 'tever') return;
+
+  const key = weerCacheKey(lat, lon);
+  const cache = leesWeerCache(lat, lon);
+  if (cache && (Date.now() - cache.ts) < WEER_CACHE_TTL_MS) return;
+  if (weerBezig.has(key)) return;
+  if (weerMislukt.has(key)) return;
+
+  weerBezig.add(key);
+  try {
+    const url = 'https://api.open-meteo.com/v1/forecast' +
+      '?latitude=' + lat + '&longitude=' + lon +
+      '&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max' +
+      '&timezone=auto&forecast_days=10&wind_speed_unit=kmh';
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const json = await res.json();
+    const d = json.daily;
+    if (!d || !Array.isArray(d.time)) throw new Error('Ongeldige respons');
+    const days = d.time.map((iso, i) => ({
+      iso,
+      weercode: d.weathercode ? d.weathercode[i] : null,
+      maxTemp: d.temperature_2m_max ? d.temperature_2m_max[i] : null,
+      minTemp: d.temperature_2m_min ? d.temperature_2m_min[i] : null,
+      neerslagKans: d.precipitation_probability_max ? d.precipitation_probability_max[i] : null,
+    }));
+    schrijfWeerCache(lat, lon, days);
+  } catch (_) {
+    if (!leesWeerCache(lat, lon)) weerMislukt.add(key);
+  } finally {
+    weerBezig.delete(key);
+    if (ui.tab === 'reizen' && ui.tripView && ui.tripView.id === t.id) render();
+  }
 }
 
 /* ============================== router & render ============================== */
