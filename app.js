@@ -1904,7 +1904,7 @@ function renderInstellingen() {
         '<textarea id="import-area" rows="3" placeholder="{ … }"></textarea></label>' +
       '<button class="btn block secondary" id="btn-import">Importeer</button>' +
     '</div>' +
-    '<p class="muted" style="text-align:center">Camper Compagnon v1.2.0 · gedeeld via huishoud-code, offline blijft alles werken</p>';
+    '<p class="muted" style="text-align:center">Camper Compagnon v1.2.1 · gedeeld via huishoud-code, offline blijft alles werken</p>';
 }
 
 function bindInstellingen(main) {
@@ -2242,29 +2242,15 @@ function schrijfWeerCache(lat, lon, days) {
   catch (_) { /* opslag vol */ }
 }
 
-function weerVensterDagen(t) {
+function weerVensterDagen() {
   const today = todayISO();
-  const d9 = new Date(today + 'T12:00:00');
-  d9.setDate(d9.getDate() + 9);
-  const windowEnd = d9.getFullYear() + '-' + String(d9.getMonth() + 1).padStart(2, '0') + '-' + String(d9.getDate()).padStart(2, '0');
-
-  function tenDays() {
-    const out = [];
-    const d = new Date(today + 'T12:00:00');
-    for (let i = 0; i < 10; i++) {
-      out.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'));
-      d.setDate(d.getDate() + 1);
-    }
-    return out;
+  const out = [];
+  const d = new Date(today + 'T12:00:00');
+  for (let i = 0; i < 10; i++) {
+    out.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'));
+    d.setDate(d.getDate() + 1);
   }
-
-  if (!t.startDate) return { type: 'days', days: tenDays() };
-
-  const toStart = daysUntil(t.startDate);
-  if (toStart !== null && toStart > 10) return { type: 'tever', n: toStart - 10 };
-
-  const overlap = tripDays(t).filter((d) => d >= today && d <= windowEnd);
-  return { type: 'days', days: overlap.length ? overlap : tenDays() };
+  return out;
 }
 
 const weerBezig = new Set();
@@ -2278,11 +2264,7 @@ function renderWeer(t) {
     return '<div class="weer-blok"><span class="muted" style="font-size:0.83rem">Geen locatie bekend voor deze reis.</span></div>';
   }
 
-  const venster = weerVensterDagen(t);
-  if (venster.type === 'tever') {
-    const dag = venster.n === 1 ? 'dag' : 'dagen';
-    return '<div class="weer-blok"><span class="muted" style="font-size:0.83rem">Voorspelling beschikbaar vanaf ' + venster.n + ' ' + dag + ' voor vertrek</span></div>';
-  }
+  const venster = weerVensterDagen();
 
   const key = weerCacheKey(lat, lon);
   const cache = leesWeerCache(lat, lon);
@@ -2293,7 +2275,7 @@ function renderWeer(t) {
       : '<div class="weer-blok"><span class="muted" style="font-size:0.83rem">Weer ophalen…</span></div>';
   }
 
-  const tegels = venster.days.map((iso) => {
+  const tegels = venster.map((iso) => {
     const d = cache.days.find((x) => x.iso === iso);
     if (!d) return '';
     const wc = WEERCODE[d.weercode] || ['🌡️', 'Onbekend'];
@@ -2324,9 +2306,6 @@ async function laadWeer(t) {
   const lat = t.omgeving && t.omgeving.lat != null ? t.omgeving.lat : null;
   const lon = t.omgeving && t.omgeving.lon != null ? t.omgeving.lon : null;
   if (lat == null || lon == null) return;
-
-  const venster = weerVensterDagen(t);
-  if (venster.type === 'tever') return;
 
   const key = weerCacheKey(lat, lon);
   const cache = leesWeerCache(lat, lon);
