@@ -443,6 +443,7 @@ const ui = {
   omgevingBusy: false,
   omgevingError: null,
   omgevingOpen: new Set(), // groepstitels waarvan alle POI's uitgeklapt zijn
+  camperSub: 'gegevens', // 'gegevens' | 'waterpas'
 };
 
 /* ---------- in-/uitklapstand van secties ----------
@@ -1901,7 +1902,7 @@ function renderInstellingen() {
         '<textarea id="import-area" rows="3" placeholder="{ … }"></textarea></label>' +
       '<button class="btn block secondary" id="btn-import">Importeer</button>' +
     '</div>' +
-    '<p class="muted" style="text-align:center">Camper Compagnon · gedeeld via huishoud-code, offline blijft alles werken</p>';
+    '<p class="muted" style="text-align:center">Camper Compagnon v1.1.0 · gedeeld via huishoud-code, offline blijft alles werken</p>';
 }
 
 function bindInstellingen(main) {
@@ -1988,10 +1989,212 @@ function bindInstellingen(main) {
   });
 }
 
+/* ============================== camper ==============================
+   Specs en waterpas-ijking staan in een eigen key-prefix (camper:spec / camper:level),
+   los van het hoofdschema (camper:v1) en bewust NIET gesynct. */
+const CAMPER_SPEC_KEY = 'camper:spec:v1';
+
+const CAMPER_SPECS = [
+  { key: 'onderstel',      label: 'Onderstel',          def: 'Fiat Ducato 2.3 Multijet', wide: true },
+  { key: 'brandstof',      label: 'Brandstof',          def: 'Diesel (Euro 6)' },
+  { key: 'transmissie',    label: 'Transmissie',        def: 'Automaat' },
+  { key: 'vermogen',       label: 'Vermogen',           def: '150 pk' },
+  { key: 'lengte',         label: 'Lengte',             def: '7,49 m' },
+  { key: 'breedte',        label: 'Breedte',            def: '2,30 m' },
+  { key: 'hoogte',         label: 'Hoogte',             def: '2,90 m' },
+  { key: 'mtm',            label: 'Max. massa (MTM)',   def: '3.500 kg' },
+  { key: 'leeggewicht',    label: 'Leeggewicht',        def: '3.184 kg' },
+  { key: 'rijklaar',       label: 'Rijklaar gewicht',   def: '3.285 kg' },
+  { key: 'bandenspanning', label: 'Bandenspanning',     def: '5,0 bar' },
+  { key: 'verswater',      label: 'Verswatertank',      def: '', placeholder: 'Instelbaar — L' },
+  { key: 'afvalwater',     label: 'Afvalwatertank',     def: '', placeholder: 'Instelbaar — L' },
+];
+
+function loadCamperSpec() {
+  try { return JSON.parse(localStorage.getItem(CAMPER_SPEC_KEY)) || {}; } catch (e) { return {}; }
+}
+function saveCamperSpec(obj) {
+  try { localStorage.setItem(CAMPER_SPEC_KEY, JSON.stringify(obj)); }
+  catch (e) { toast('Opslaan mislukt — opslag vol of geblokkeerd.'); }
+}
+
+function renderCamper() {
+  const sub = ui.camperSub === 'waterpas' ? 'waterpas' : 'gegevens';
+  let html = '<div class="subtabs">' +
+    '<button data-csub="gegevens" class="' + (sub === 'gegevens' ? 'active' : '') + '">Gegevens</button>' +
+    '<button data-csub="waterpas" class="' + (sub === 'waterpas' ? 'active' : '') + '">Waterpas</button>' +
+  '</div>';
+  html += sub === 'waterpas' ? renderCamperWaterpas() : renderCamperGegevens();
+  return html;
+}
+
+function renderCamperGegevens() {
+  const stored = loadCamperSpec();
+  let html = '<div class="camper-hero">' +
+    '<div class="ch-kicker">Notin Progress</div>' +
+    '<div class="ch-title">Sevilla · 2017</div>' +
+    '<div class="ch-plate">HTP-56-F</div>' +
+  '</div>';
+  html += '<div class="section-label">Specificaties</div>';
+  html += '<div class="card spec-grid">';
+  for (const sp of CAMPER_SPECS) {
+    const has = Object.prototype.hasOwnProperty.call(stored, sp.key);
+    const val = has ? stored[sp.key] : sp.def;
+    const empty = !val;
+    html += '<label class="field spec-field' + (sp.wide ? ' spec-wide' : '') + (empty ? ' spec-empty' : '') + '">' +
+      '<span>' + esc(sp.label) + '</span>' +
+      '<input type="text" data-spec="' + esc(sp.key) + '" value="' + esc(val) + '" ' +
+        'placeholder="' + esc(sp.placeholder || 'Instelbaar') + '" autocomplete="off"></label>';
+  }
+  html += '</div>';
+  html += '<p class="muted" style="text-align:center">Tik op een veld om het aan te passen — wordt lokaal bewaard.</p>';
+  return html;
+}
+
+function renderCamperWaterpas() {
+  return '<div class="card level-card">' +
+    '<div class="level-circle" id="level-circle">' +
+      '<span class="level-cross-h"></span><span class="level-cross-v"></span>' +
+      '<span class="level-ring"></span>' +
+      '<span class="level-bubble" id="level-bubble"></span>' +
+    '</div>' +
+    '<div class="level-readout">' +
+      '<div class="lr-item"><span class="lr-label">Voor / achter</span><span class="lr-val mono" id="level-pitch">–</span></div>' +
+      '<div class="lr-item"><span class="lr-label">Links / rechts</span><span class="lr-val mono" id="level-roll">–</span></div>' +
+    '</div>' +
+    '<div id="level-error" class="alert danger" hidden></div>' +
+    '<button class="btn block" id="level-activate">Activeer waterpas</button>' +
+    '<button class="btn block secondary" id="level-calibrate" hidden>Kalibreer — huidige stand = nul</button>' +
+    '<p class="muted level-disclaimer">Indicatie op basis van de telefoonsensor — geen precisie-instrument.</p>' +
+  '</div>';
+}
+
+/* ---------- waterpas: state & sensorlogica ---------- */
+const LEVEL_OFFSET_KEY = 'camper:level:offset';
+let levelOffset = (() => {
+  try { return JSON.parse(localStorage.getItem(LEVEL_OFFSET_KEY)) || { beta: 0, gamma: 0 }; }
+  catch (e) { return { beta: 0, gamma: 0 }; }
+})();
+let lastWasLevel = false;
+let levelActive = false;
+let lastBeta = 0, lastGamma = 0;
+
+// per sensor-update
+function onOrientation(ev) {
+  if (ev.beta == null || ev.gamma == null) return;
+  lastBeta = ev.beta;
+  lastGamma = ev.gamma;
+  const pitch = ev.beta  - levelOffset.beta;   // voor/achter
+  const roll  = ev.gamma - levelOffset.gamma;  // links/rechts
+  renderLevel(pitch, roll);
+
+  // haptiek wanneer binnen ±0,5° van nul (alleen op overgang, niet continu)
+  const isLevel = Math.abs(pitch) <= 0.5 && Math.abs(roll) <= 0.5;
+  if (isLevel && !lastWasLevel && navigator.vibrate) navigator.vibrate(40);
+  lastWasLevel = isLevel;
+}
+
+// bubble-positie: clamp ±10° → straal in px
+function renderLevel(pitch, roll) {
+  const bubble = document.getElementById('level-bubble');
+  if (!bubble) return; // weergave niet (meer) zichtbaar
+  const R = 44; // px, straal van de cirkel
+  const clamp = (v) => Math.max(-10, Math.min(10, v)) / 10;
+  const x = clamp(roll)  * R;   // bubble naar de hoge zijde
+  const y = clamp(pitch) * R;
+  bubble.style.transform = 'translate(' + x.toFixed(1) + 'px, ' + y.toFixed(1) + 'px)';
+
+  const isLevel = Math.abs(pitch) <= 0.5 && Math.abs(roll) <= 0.5;
+  const circle = document.getElementById('level-circle');
+  if (circle) circle.classList.toggle('is-level', isLevel);
+  const pe = document.getElementById('level-pitch');
+  const re = document.getElementById('level-roll');
+  if (pe) pe.textContent = pitch.toFixed(1).replace('.', ',') + '°';
+  if (re) re.textContent = roll.toFixed(1).replace('.', ',') + '°';
+}
+
+// iOS 13+ vraagt expliciet toestemming, alleen vanuit een tik
+async function activateLevel() {
+  if (typeof DeviceOrientationEvent === 'undefined') {
+    showLevelError('Bewegingssensor niet beschikbaar op dit toestel.');
+    return;
+  }
+  if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+    try {
+      const res = await DeviceOrientationEvent.requestPermission();
+      if (res !== 'granted') { showLevelError('Toegang tot bewegingssensor geweigerd.'); return; }
+    } catch (e) { showLevelError('Sensor niet beschikbaar.'); return; }
+  }
+  if (!levelActive) {
+    window.addEventListener('deviceorientation', onOrientation, true);
+    levelActive = true;
+  }
+  const err = document.getElementById('level-error');
+  if (err) err.hidden = true;
+  updateLevelButtons();
+}
+
+function stopLevel() {
+  if (!levelActive) return;
+  window.removeEventListener('deviceorientation', onOrientation, true);
+  levelActive = false;
+  lastWasLevel = false;
+}
+
+function showLevelError(msg) {
+  const el = document.getElementById('level-error');
+  if (el) { el.textContent = msg; el.hidden = false; }
+}
+
+function updateLevelButtons() {
+  const act = document.getElementById('level-activate');
+  const cal = document.getElementById('level-calibrate');
+  if (act) act.hidden = levelActive;
+  if (cal) cal.hidden = !levelActive;
+}
+
+// kalibreren: huidige stand = nul
+function calibrateLevel(currentBeta, currentGamma) {
+  levelOffset = { beta: currentBeta, gamma: currentGamma };
+  try { localStorage.setItem(LEVEL_OFFSET_KEY, JSON.stringify(levelOffset)); } catch (e) { /* oké */ }
+}
+
+function bindCamper(main) {
+  main.querySelectorAll('[data-csub]').forEach((btn) => {
+    btn.addEventListener('click', () => { ui.camperSub = btn.dataset.csub; render(); });
+  });
+
+  if (ui.camperSub === 'waterpas') {
+    updateLevelButtons();
+    // listener nog actief uit eerdere render? toon meteen de laatste stand
+    if (levelActive) renderLevel(lastBeta - levelOffset.beta, lastGamma - levelOffset.gamma);
+    const act = main.querySelector('#level-activate');
+    if (act) act.addEventListener('click', activateLevel);
+    const cal = main.querySelector('#level-calibrate');
+    if (cal) cal.addEventListener('click', () => {
+      calibrateLevel(lastBeta, lastGamma);
+      lastWasLevel = false;
+      renderLevel(lastBeta - levelOffset.beta, lastGamma - levelOffset.gamma);
+      toast('Waterpas gekalibreerd — huidige stand is nu nul');
+    });
+    return;
+  }
+
+  main.querySelectorAll('input[data-spec]').forEach((inp) => {
+    inp.addEventListener('change', () => {
+      const stored = loadCamperSpec();
+      stored[inp.dataset.spec] = inp.value.trim();
+      saveCamperSpec(stored);
+      const field = inp.closest('.spec-field');
+      if (field) field.classList.toggle('spec-empty', !inp.value.trim());
+    });
+  });
+}
+
 /* ============================== router & render ============================== */
 const TITLES = {
   voorraad: 'Voorraad', wensen: 'Wensen', reizen: 'Reizen',
-  lijsten: 'Lijsten', instellingen: 'Instellingen',
+  lijsten: 'Lijsten', camper: 'Camper', instellingen: 'Instellingen',
 };
 
 function render() {
@@ -1999,12 +2202,16 @@ function render() {
   document.getElementById('screen-title').textContent =
     ui.tab === 'reizen' && ui.tripView ? 'Reis' : TITLES[ui.tab];
 
+  // sensor stilzetten zodra we de waterpas-weergave verlaten
+  if (!(ui.tab === 'camper' && ui.camperSub === 'waterpas')) stopLevel();
+
   let html = '';
   switch (ui.tab) {
     case 'voorraad': html = renderVoorraad(); break;
     case 'wensen': html = renderWensen(); break;
     case 'reizen': html = renderReizen(); break;
     case 'lijsten': html = renderLijsten(); break;
+    case 'camper': html = renderCamper(); break;
     case 'instellingen': html = renderInstellingen(); break;
   }
   main.innerHTML = html;
@@ -2014,6 +2221,7 @@ function render() {
     case 'wensen': bindWensen(main); break;
     case 'reizen': bindReizen(main); break;
     case 'lijsten': bindLijsten(main); break;
+    case 'camper': bindCamper(main); break;
     case 'instellingen': bindInstellingen(main); break;
   }
 
